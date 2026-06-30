@@ -24,12 +24,8 @@ other community space), you agree to uphold that standard.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainers. Reports can be filed privately via GitHub's
-**"Report content"** feature, or by contacting the maintainers at the address
-listed in this repository's profile.
-
-> Maintainers: replace this line with a dedicated conduct contact
-> (e.g. `conduct@yourdomain`) before launch.
+reported privately to the project maintainers via GitHub's **"Report content"**
+feature (available from the `...` menu on any comment, issue, or pull request).
 
 All complaints will be reviewed and investigated promptly and fairly. Project
 maintainers are obligated to respect the privacy and security of the reporter of
