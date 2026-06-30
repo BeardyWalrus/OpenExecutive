@@ -156,15 +156,30 @@ def test_anthropic_provider_constructs_lazy_only_once(
 # --------------------------------------------------------------------------
 
 
-def _settings_stub(*, enabled: bool, key: str | None = "sk-or-v1-xxx") -> Any:
+def _settings_stub(
+    *,
+    enabled: bool = False,
+    key: str | None = "sk-or-v1-xxx",
+    anthropic_key: str | None = "sk-test",
+    local_enabled: bool = False,
+    local_base_url: str | None = None,
+    local_models: list[str] | None = None,
+    local_api_key: str | None = None,
+    local_timeout_s: float = 300.0,
+) -> Any:
     return SimpleNamespace(
-        anthropic_api_key="sk-test",
+        anthropic_api_key=anthropic_key,
         openrouter_enabled=enabled,
         openrouter_api_key=key,
         openrouter_base_url="https://openrouter.ai/api/v1",
         openrouter_app_title="Open Executive",
         openrouter_referer=None,
         openrouter_timeout_s=180.0,
+        local_models_enabled=local_enabled,
+        local_base_url=local_base_url,
+        local_models=local_models or [],
+        local_api_key=local_api_key,
+        local_timeout_s=local_timeout_s,
     )
 
 
@@ -277,3 +292,93 @@ def test_allowed_models_includes_openrouter_set_only_when_enabled(
     assert on == [*ANTHROPIC_DIRECT_MODELS, *OPENROUTER_MODELS]
     # Both sets contain entries (catch the case where one list was emptied).
     assert len(on) > len(off)
+
+
+# --------------------------------------------------------------------------
+# Local / self-hosted model routing
+# --------------------------------------------------------------------------
+
+
+def _local_stub(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> None:
+    monkeypatch.setattr(
+        "openexecutive.providers.registry.get_settings",
+        lambda: _settings_stub(
+            local_enabled=True,
+            local_base_url="http://localhost:11434/v1",
+            local_models=["llama3.3", "qwen2.5"],
+            **kwargs,
+        ),
+    )
+    registry_mod._reset_for_tests()
+
+
+def test_local_model_routes_to_local_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.providers.openai_compatible import OpenAICompatibleProvider
+    from openexecutive.providers.openrouter_provider import OpenRouterProvider
+
+    _local_stub(monkeypatch, enabled=False)
+    provider = get_provider("llama3.3")
+    assert isinstance(provider, OpenAICompatibleProvider)
+    # The local backend is the plain base class, never the OpenRouter subclass.
+    assert not isinstance(provider, OpenRouterProvider)
+    # Cached singleton — same object across calls.
+    assert get_provider("qwen2.5") is provider
+
+
+def test_local_provider_distinct_from_openrouter_singleton(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With OpenRouter also on, a local slug and an OpenRouter slug resolve to
+    different provider instances — a local request can't leak to OpenRouter."""
+    _local_stub(monkeypatch, enabled=True)
+    local = get_provider("llama3.3")
+    openrouter = get_provider("openai/gpt-5")
+    assert local is not openrouter
+
+
+def test_unlisted_model_does_not_route_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Local routing claims ONLY its configured slugs; an unlisted non-Claude
+    slug with OpenRouter off is still a 400."""
+    from fastapi import HTTPException
+
+    _local_stub(monkeypatch, enabled=False)
+    with pytest.raises(HTTPException) as exc_info:
+        get_provider("some-unlisted-model")
+    assert exc_info.value.status_code == 400
+
+
+def test_allowed_models_includes_local_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.providers import allowed_models
+    from openexecutive.providers.registry import ANTHROPIC_DIRECT_MODELS
+
+    _local_stub(monkeypatch, enabled=False)
+    assert allowed_models() == [*ANTHROPIC_DIRECT_MODELS, "llama3.3", "qwen2.5"]
+
+
+def test_anthropic_free_deployment_hides_claude_and_serves_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No Anthropic key + OpenRouter off + local on: the Council UI must not
+    offer Claude (unreachable), only the local slugs — which route locally."""
+    from openexecutive.providers import allowed_models
+    from openexecutive.providers.openai_compatible import OpenAICompatibleProvider
+
+    _local_stub(monkeypatch, enabled=False, anthropic_key=None)
+    assert allowed_models() == ["llama3.3", "qwen2.5"]
+    assert isinstance(get_provider("llama3.3"), OpenAICompatibleProvider)
+
+
+def test_claude_without_key_or_openrouter_raises_actionable_400(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An Anthropic-free deployment that left a model setting pointed at Claude
+    gets a clear 400 — not a None-key SDK crash deep in a request."""
+    from fastapi import HTTPException
+
+    _local_stub(monkeypatch, enabled=False, anthropic_key=None)
+    with pytest.raises(HTTPException) as exc_info:
+        get_provider("claude-sonnet-4-6")
+    assert exc_info.value.status_code == 400
+    assert "ANTHROPIC_API_KEY" in exc_info.value.detail

@@ -259,11 +259,14 @@ The deployed UI is gated behind Google sign-in with an email allow-list, and the
 
 ## Configuration
 
-All settings via environment variables. Minimum required: `ANTHROPIC_API_KEY`.
+All settings via environment variables. Minimum required: `ANTHROPIC_API_KEY` —
+*unless* you configure a local or OpenRouter backend instead (see [Running on
+Local Models](#running-on-local-models)). At least one provider must be set or
+the app refuses to start.
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
+| `ANTHROPIC_API_KEY` | Yes¹ | — | Anthropic API key |
 | `DEFAULT_MODEL` | No | `claude-sonnet-4-6` | Executive + most specialists |
 | `DEEP_REASONING_MODEL` | No | `claude-opus-4-7` | CSO, CFO, GC, Board |
 | `VECTOR_STORE_PATH` | No | `./chroma_db` | ChromaDB directory |
@@ -287,11 +290,54 @@ All settings via environment variables. Minimum required: `ANTHROPIC_API_KEY`.
 | `GOOGLE_OAUTH_CLIENT_SECRET` | No | — | Google OAuth client secret (Gmail MCP) |
 | `OPENROUTER_ENABLED` | No | `false` | Route Claude calls through OpenRouter and unlock non-Anthropic models per-agent in the Council UI |
 | `OPENROUTER_API_KEY` | No | — | Required when `OPENROUTER_ENABLED=true` |
+| `LOCAL_MODELS_ENABLED` | No | `false` | Route selected slugs to a local OpenAI-compatible server (Ollama, LM Studio, vLLM, llama.cpp) |
+| `LOCAL_BASE_URL` | No | — | Local server URL incl. version path, e.g. `http://localhost:11434/v1`. Required when `LOCAL_MODELS_ENABLED=true` |
+| `LOCAL_API_KEY` | No | — | Optional bearer token (vLLM / gateways); Ollama & LM Studio need none |
+| `LOCAL_MODELS` | No | — | Comma-separated local model slugs to surface in the Council UI and route locally, e.g. `llama3.3,qwen2.5` |
+| `LOCAL_TIMEOUT_S` | No | `300` | Per-call timeout for local generation, in seconds |
 | `HONCHO_ENABLED` | No | `false` | Per-person memory layer ([honcho.dev](https://honcho.dev)) — a peer card shared across all channels |
 | `HONCHO_API_KEY` | No | — | Required when `HONCHO_ENABLED=true` |
 | `HONCHO_BASE_URL` | No | — | Self-hosted Honcho endpoint |
 
 See [.env.example](.env.example) for the full list.
+
+> ¹ `ANTHROPIC_API_KEY` is required only when you serve Claude models directly.
+> It can be omitted entirely if you run on local models (`LOCAL_MODELS_ENABLED`)
+> or route through OpenRouter (`OPENROUTER_ENABLED`).
+
+## Running on Local Models
+
+Open Executive can run against any **OpenAI-compatible** local server — Ollama,
+LM Studio, vLLM, or llama.cpp — instead of (or alongside) the Anthropic API.
+Local model slugs route to your server through the same provider abstraction the
+hosted models use; no agent or orchestrator code changes.
+
+```bash
+# 1. Pull a capable, tool-use-friendly model (example: Ollama)
+ollama pull llama3.3
+
+# 2. In .env — point at the local server and list the slugs to expose
+LOCAL_MODELS_ENABLED=true
+LOCAL_BASE_URL=http://localhost:11434/v1   # Ollama default
+LOCAL_MODELS=llama3.3
+
+# 3. (Optional) run with NO Anthropic key — make local the default everywhere
+DEFAULT_MODEL=llama3.3
+DEEP_REASONING_MODEL=llama3.3
+ROUTING_MODEL=llama3.3
+# ...and leave ANTHROPIC_API_KEY unset
+```
+
+The listed slugs appear in the **Council UI** model dropdown, so you can also run
+a hybrid setup — keep the Executive on Claude while flipping individual
+specialists to a local model per-agent.
+
+**Caveats.** Server-side web search (`ENABLE_WEB_SEARCH`) and Anthropic prompt
+caching / extended thinking have no local equivalent and are automatically
+disabled for local models. Multi-agent routing leans heavily on tool use, so
+pick a model that's strong at it (e.g. Llama 3.3 70B, Qwen2.5) — small models
+may route poorly. `LOCAL_API_KEY` is only needed if your server (vLLM, or a
+gateway) requires a bearer token; Ollama and LM Studio need none.
 
 ## Adding a New Specialist Agent
 

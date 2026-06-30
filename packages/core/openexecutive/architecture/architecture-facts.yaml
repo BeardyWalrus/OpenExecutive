@@ -37,8 +37,21 @@ system:
       matrix) was removed — its 429s surfaced as user-visible errors and the
       per-agent free-model surface was more than it earned; BYO-model routing
       through OpenRouter is otherwise unchanged.
-      Non-Claude slugs always route through OpenRouter; selecting one
-      with OPENROUTER_ENABLED=false is rejected at the API layer.
+      When LOCAL_MODELS_ENABLED=true (plus LOCAL_BASE_URL), the slugs listed
+      in LOCAL_MODELS route to a self-hosted OpenAI-compatible server
+      (Ollama / LM Studio / vLLM / llama.cpp) through the same provider seam,
+      reusing the OpenRouter request/response/stream translator. Those slugs
+      are added to the Council UI dropdown and get the non-Claude feature
+      spec (no cache_control / thinking / web_search). This makes
+      ANTHROPIC_API_KEY optional: a deployment with only local (or
+      OpenRouter) models configured boots with no Anthropic key — the
+      Settings validator just requires that at least one provider is
+      reachable. Requesting a Claude model with no key and OpenRouter off
+      returns an actionable 400.
+      Non-Claude slugs route through OpenRouter, except those listed in
+      LOCAL_MODELS (which route to the local backend); selecting an
+      OpenRouter-only slug with OPENROUTER_ENABLED=false is rejected at the
+      API layer.
       Provider selection is per-call by model, not global — so the
       Executive can be on GPT-5 while the CFO specialist stays on
       claude-opus-4-7 within the same turn.
@@ -53,8 +66,9 @@ system:
     - Tool definitions are sorted by name before being sent to the API so cache hits survive across processes.
     - Company-specific data lives under packages/core/company/ and is gitignored. Never commit it.
     - Audit writes never break a chat turn or tool call — exceptions are swallowed with a warning.
-    - Provider selection is per-call by model (openexecutive.providers.get_provider(model)). A single chat turn can mix Anthropic-routed Claude calls and OpenRouter-routed non-Claude calls — no global "current provider" state.
-    - When a non-Claude model is selected, Anthropic-only fields (cache_control on system/tool/user blocks, adaptive thinking + output_config, server-side web_search) are stripped by the feature gate before the request leaves the process. Callers do NOT need to know which model they're routing to.
+    - Provider selection is per-call by model (openexecutive.providers.get_provider(model)). A single chat turn can mix Anthropic-routed Claude calls, OpenRouter-routed non-Claude calls, and locally-routed self-hosted models — no global "current provider" state.
+    - When a non-Claude or local model is selected, Anthropic-only fields (cache_control on system/tool/user blocks, adaptive thinking + output_config, server-side web_search) are stripped by the feature gate before the request leaves the process. Callers do NOT need to know which model they're routing to.
+    - ANTHROPIC_API_KEY is optional: a Settings validator requires at least one provider (Anthropic key, OpenRouter, or local models) to be configured, so an Anthropic-free deployment is supported but a zero-provider one fails fast at startup.
     - External-monitor adapters are read-only — they never write to upstream systems. The whole `monitoring/` subsystem is observation-only; surfacing happens through the alert pipeline, never via a direct upstream side-effect.
     - External signals never auto-execute on the principal's behalf. Every signal that surfaces is proposed via the alert pipeline (and thus subject to triage / mute / severity gates); the scheduler never dispatches an outbound message directly off a signal.
     - An external signal whose `dedup_key` already exists is dropped at ingest via the UNIQUE(dedup_key) constraint on `external_signals`. Adapter retries / re-polls cannot multiply alerts for the same upstream event.

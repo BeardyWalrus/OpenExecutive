@@ -9,11 +9,14 @@ route differently.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import HTTPException
 
 from openexecutive.config import get_settings
 from openexecutive.providers.anthropic_provider import AnthropicProvider
 from openexecutive.providers.feature_gate import FeatureSpec
+from openexecutive.providers.openai_compatible import OpenAICompatibleProvider
 from openexecutive.providers.openrouter_provider import OpenRouterProvider
 from openexecutive.providers.provider import LLMProvider
 
@@ -73,17 +76,35 @@ _DEFAULT_NON_CLAUDE_SPEC = FeatureSpec(
 )
 
 
+def _local_models(settings: Any) -> list[str]:
+    """Configured local model slugs, or ``[]`` when local routing is off.
+
+    Read defensively: lightweight test settings stubs may omit the field.
+    """
+    if not getattr(settings, "local_models_enabled", False):
+        return []
+    return list(getattr(settings, "local_models", []) or [])
+
+
 def allowed_models() -> list[str]:
     """Flat allowlist the Council UI's dropdown reads.
 
-    Always exposes the Anthropic-direct trio. The OpenRouter set is folded
-    in when ``OPENROUTER_ENABLED`` is on so the dropdown can't offer a
-    model the runtime won't actually serve.
+    The dropdown can't offer a model the runtime won't actually serve, so
+    each family is folded in only when it's reachable:
+
+    * Anthropic-direct trio — when an ``ANTHROPIC_API_KEY`` is set, OR when
+      ``OPENROUTER_ENABLED`` is on (Claude is then reachable via OpenRouter).
+    * OpenRouter set — when ``OPENROUTER_ENABLED`` is on.
+    * Local models — when ``LOCAL_MODELS_ENABLED`` is on.
     """
     settings = get_settings()
+    models: list[str] = []
+    if getattr(settings, "anthropic_api_key", None) or settings.openrouter_enabled:
+        models.extend(ANTHROPIC_DIRECT_MODELS)
     if settings.openrouter_enabled:
-        return [*ANTHROPIC_DIRECT_MODELS, *OPENROUTER_MODELS]
-    return list(ANTHROPIC_DIRECT_MODELS)
+        models.extend(OPENROUTER_MODELS)
+    models.extend(_local_models(settings))
+    return models
 
 
 def allowed_models_for(agent_id: str | None) -> list[str]:
@@ -106,14 +127,56 @@ def _is_claude(model: str) -> bool:
 # are async-safe. Recreating them per call burns ~10 ms each.
 _anthropic_provider: AnthropicProvider | None = None
 _openrouter_provider: OpenRouterProvider | None = None
+_local_provider: OpenAICompatibleProvider | None = None
 
 
 def _anthropic() -> AnthropicProvider:
     global _anthropic_provider
     if _anthropic_provider is None:
         settings = get_settings()
-        _anthropic_provider = AnthropicProvider(api_key=settings.anthropic_api_key)
+        api_key = settings.anthropic_api_key
+        if not api_key:
+            # Reachable only when a Claude model is requested with no key and
+            # OpenRouter off — e.g. an Anthropic-free deployment that left a
+            # model setting pointed at Claude. Fail with actionable guidance.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "A Claude model was requested but ANTHROPIC_API_KEY is not "
+                    "set. Set it, enable OpenRouter, or point the model setting "
+                    "at a configured local model."
+                ),
+            )
+        _anthropic_provider = AnthropicProvider(api_key=api_key)
     return _anthropic_provider
+
+
+def _local() -> OpenAICompatibleProvider:
+    global _local_provider
+    if _local_provider is None:
+        settings = get_settings()
+        base_url = getattr(settings, "local_base_url", None)
+        if not base_url:
+            # The Settings model_validator already prevents LOCAL_MODELS_ENABLED
+            # without a base URL, but defense in depth — a misconfigured env
+            # could otherwise produce a request against an empty host.
+            raise HTTPException(
+                status_code=400,
+                detail="Local model routing requires LOCAL_BASE_URL",
+            )
+        # Local models get the non-Claude feature spec: no cache_control,
+        # thinking, or server-side web_search — those are Anthropic-only and
+        # would 400 (or be silently ignored) on an OpenAI-compatible server.
+        spec_lookup: dict[str, FeatureSpec] = {
+            m: _DEFAULT_NON_CLAUDE_SPEC for m in _local_models(settings)
+        }
+        _local_provider = OpenAICompatibleProvider(
+            base_url=base_url,
+            api_key=getattr(settings, "local_api_key", None),
+            timeout_s=getattr(settings, "local_timeout_s", 300.0),
+            spec_lookup=spec_lookup,
+        )
+    return _local_provider
 
 
 def _openrouter() -> OpenRouterProvider:
@@ -155,22 +218,31 @@ def get_provider(model: str) -> LLMProvider:
 
     * Claude family — Anthropic direct by default; OpenRouter when
       ``OPENROUTER_ENABLED`` is on.
-    * Non-Claude (anything in ``OPENROUTER_MODELS``, or any unknown slug)
-      — OpenRouter only. Raises HTTP 400 when ``OPENROUTER_ENABLED`` is
-      off, since we have no other backend that speaks those models.
+    * Local models (slugs listed in ``LOCAL_MODELS`` with
+      ``LOCAL_MODELS_ENABLED`` on) — the self-hosted OpenAI-compatible
+      backend at ``LOCAL_BASE_URL``.
+    * Other non-Claude (anything in ``OPENROUTER_MODELS``, or any unknown
+      slug) — OpenRouter only. Raises HTTP 400 when ``OPENROUTER_ENABLED``
+      is off, since we have no other backend that speaks those models.
     """
     settings = get_settings()
     if _is_claude(model):
         if settings.openrouter_enabled:
             return _openrouter()
         return _anthropic()
-    # Non-Claude requires OpenRouter to be enabled.
+    # Local models take precedence for their configured slugs — a local
+    # endpoint can serve them with no external dependency.
+    if model in _local_models(settings):
+        return _local()
+    # Other non-Claude slugs require OpenRouter to be enabled.
     if not settings.openrouter_enabled:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Model {model!r} requires OPENROUTER_ENABLED=true; "
-                f"set OPENROUTER_API_KEY and toggle the flag to route this model."
+                f"Model {model!r} requires OPENROUTER_ENABLED=true (set "
+                f"OPENROUTER_API_KEY and toggle the flag), or list it in "
+                f"LOCAL_MODELS with LOCAL_MODELS_ENABLED=true to serve it "
+                f"from a local OpenAI-compatible backend."
             ),
         )
     return _openrouter()
@@ -178,6 +250,7 @@ def get_provider(model: str) -> LLMProvider:
 
 def _reset_for_tests() -> None:
     """Drop cached provider singletons. Test-only — pytest fixtures call this."""
-    global _anthropic_provider, _openrouter_provider
+    global _anthropic_provider, _openrouter_provider, _local_provider
     _anthropic_provider = None
     _openrouter_provider = None
+    _local_provider = None
