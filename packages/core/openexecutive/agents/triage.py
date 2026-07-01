@@ -169,8 +169,13 @@ class TriageAgent(BaseAgent):
 
     @property
     def model(self) -> str:  # type: ignore[override]
-        # Cheap and fast. Triage runs on every inbound event.
-        return "claude-haiku-4-5-20251001"
+        # Cheap and fast. Triage runs on every inbound event. Uses the
+        # configured routing model (like utility_fast) so an Anthropic-free
+        # deployment routes triage to its local / OpenRouter model too,
+        # rather than forcing a hardcoded Claude model.
+        from openexecutive.config import get_settings
+
+        return get_settings().routing_model
 
     def get_system_prompt(self) -> str:
         from openexecutive.prompts.triage_prompt import TRIAGE_PROMPT

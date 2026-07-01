@@ -22,6 +22,18 @@ def _fake_response(tool_input: dict):
     return SimpleNamespace(content=[block])
 
 
+def test_triage_model_follows_routing_model(monkeypatch) -> None:
+    """Triage must use the configured routing model, not a hardcoded Claude
+    slug — otherwise an Anthropic-free (local / OpenRouter) deployment can't
+    run the alert pipeline. The property imports get_settings from
+    openexecutive.config at call time, so patch it there."""
+    monkeypatch.setattr(
+        "openexecutive.config.get_settings",
+        lambda: SimpleNamespace(routing_model="llama3.3"),
+    )
+    assert TriageAgent().model == "llama3.3"
+
+
 def test_triage_returns_parsed_decision_and_passes_context() -> None:
     fake_input = {
         "alert": True,
