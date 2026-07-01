@@ -29,7 +29,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    anthropic_api_key: str = Field(..., alias="ANTHROPIC_API_KEY")
+    # Optional: a deployment can run entirely on local / OpenRouter models
+    # with no Anthropic key. The `_validate_provider_available` model
+    # validator below ensures at least one backend is reachable, and the
+    # registry raises an actionable error if a Claude model is requested
+    # while this is unset.
+    anthropic_api_key: str | None = Field(None, alias="ANTHROPIC_API_KEY")
 
     default_model: str = Field("claude-sonnet-4-6", alias="DEFAULT_MODEL")
     deep_reasoning_model: str = Field("claude-opus-4-7", alias="DEEP_REASONING_MODEL")
@@ -100,6 +105,70 @@ class Settings(BaseSettings):
         if self.openrouter_enabled and not self.openrouter_api_key:
             raise ValueError(
                 "OPENROUTER_ENABLED=true requires OPENROUTER_API_KEY to be set"
+            )
+        return self
+
+    # ---- Local / self-hosted models ------------------------------------
+    # Route selected model slugs to a local OpenAI-compatible server
+    # (Ollama, LM Studio, vLLM, llama.cpp, …) instead of the Anthropic API.
+    # Default OFF so a fresh checkout's behavior is identical to before.
+    #
+    # To run with NO Anthropic key, also point the model settings at local
+    # slugs, e.g.:
+    #   LOCAL_MODELS_ENABLED=true
+    #   LOCAL_BASE_URL=http://localhost:11434/v1   # Ollama
+    #   LOCAL_MODELS=llama3.3,qwen2.5
+    #   DEFAULT_MODEL=llama3.3
+    #   DEEP_REASONING_MODEL=llama3.3
+    #   ROUTING_MODEL=llama3.3
+    local_models_enabled: bool = Field(False, alias="LOCAL_MODELS_ENABLED")
+    # Base URL of the local OpenAI-compatible server, including the version
+    # path, e.g. http://localhost:11434/v1 (Ollama) or http://localhost:1234/v1
+    # (LM Studio). Required when LOCAL_MODELS_ENABLED is on.
+    local_base_url: str | None = Field(None, alias="LOCAL_BASE_URL")
+    # Optional bearer token. Ollama / LM Studio need none; vLLM or a gateway
+    # in front of it may. Omitted from requests entirely when unset.
+    local_api_key: str | None = Field(None, alias="LOCAL_API_KEY")
+    # Comma-separated model slugs to surface in the Council UI and route to
+    # the local backend, e.g. "llama3.3,qwen2.5:14b". These are sent to the
+    # server verbatim, so they must match the names it serves.
+    local_models: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="LOCAL_MODELS"
+    )
+    # Local generation (especially CPU inference) can be far slower than a
+    # hosted API. Default generous so a slow first token doesn't time out.
+    local_timeout_s: float = Field(300.0, alias="LOCAL_TIMEOUT_S")
+
+    @field_validator("local_models", mode="before")
+    @classmethod
+    def _parse_local_models(cls, v: Any) -> list[str]:
+        if isinstance(v, list):
+            return [str(x).strip() for x in v if str(x).strip()]
+        if isinstance(v, str) and v.strip():
+            return [x.strip() for x in v.split(",") if x.strip()]
+        return []
+
+    @model_validator(mode="after")
+    def _validate_local_models(self) -> "Settings":
+        if self.local_models_enabled and not self.local_base_url:
+            raise ValueError(
+                "LOCAL_MODELS_ENABLED=true requires LOCAL_BASE_URL to be set "
+                "(e.g. http://localhost:11434/v1 for Ollama)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_provider_available(self) -> "Settings":
+        # At least one backend must be reachable, or every model call fails.
+        if not (
+            self.anthropic_api_key
+            or self.openrouter_enabled
+            or self.local_models_enabled
+        ):
+            raise ValueError(
+                "No LLM provider configured. Set ANTHROPIC_API_KEY, or enable "
+                "OpenRouter (OPENROUTER_ENABLED=true + OPENROUTER_API_KEY), or "
+                "enable local models (LOCAL_MODELS_ENABLED=true + LOCAL_BASE_URL)."
             )
         return self
 
