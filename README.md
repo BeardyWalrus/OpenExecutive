@@ -7,6 +7,12 @@
 
 An AI system that acts as your company's virtual executive team — a senior advisor with Harvard MBA-level knowledge, customized for your specific business.
 
+## Demo
+
+[![Open Executive demo video](https://img.youtube.com/vi/HqbiU1-oSWs/maxresdefault.jpg)](https://youtu.be/HqbiU1-oSWs)
+
+A walkthrough of Open Executive in action — [watch on YouTube](https://youtu.be/HqbiU1-oSWs).
+
 ## What It Does
 
 Developed by [sentelabs.ai](https://sentelabs.ai) Open Executive provides a single coherent executive voice backed by eight specialist AI agents:
