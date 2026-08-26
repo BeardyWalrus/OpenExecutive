@@ -9,9 +9,9 @@ An AI system that acts as your company's virtual executive team — a senior adv
 
 ## Demo
 
-[![Open Executive demo video](https://img.youtube.com/vi/HqbiU1-oSWs/maxresdefault.jpg)](https://youtu.be/HqbiU1-oSWs)
+[![Open Executive demo video](https://img.youtube.com/vi/O_g97xxVTMk/maxresdefault.jpg)](https://youtu.be/O_g97xxVTMk)
 
-A walkthrough of Open Executive in action — [watch on YouTube](https://youtu.be/HqbiU1-oSWs).
+A walkthrough of Open Executive in action — [watch on YouTube](https://youtu.be/O_g97xxVTMk).
 
 ## What It Does
 
