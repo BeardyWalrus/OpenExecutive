@@ -40,6 +40,13 @@ Repository = "https://github.com/SenteLabsAI/OpenExecutive"
 Issues = "https://github.com/SenteLabsAI/OpenExecutive/issues"
 
 [project.optional-dependencies]
+# Claude Agent SDK backend (AGENT_SDK_ENABLED=true) — routes Claude calls
+# through the Claude Code CLI so they run on a Claude Pro/Max subscription
+# instead of a metered ANTHROPIC_API_KEY. Optional because the wheel bundles
+# a platform-specific CLI binary (~95 MB) that no other backend needs.
+agent-sdk = [
+    "claude-agent-sdk>=0.2.0",
+]
 dev = [
     "pytest>=8.2.0",
     "pytest-asyncio>=0.23.0",

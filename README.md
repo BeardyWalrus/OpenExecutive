@@ -301,6 +301,9 @@ the app refuses to start.
 | `LOCAL_API_KEY` | No | — | Optional bearer token (vLLM / gateways); Ollama & LM Studio need none |
 | `LOCAL_MODELS` | No | — | Comma-separated local model slugs to surface in the Council UI and route locally, e.g. `llama3.3,qwen2.5` |
 | `LOCAL_TIMEOUT_S` | No | `300` | Per-call timeout for local generation, in seconds |
+| `AGENT_SDK_ENABLED` | No | `false` | Route Claude calls through the Claude Code CLI so they run on a Claude Pro/Max **subscription** instead of a metered API key |
+| `AGENT_SDK_CLI_PATH` | No | — | Explicit path to the `claude` executable; defaults to the CLI bundled with `claude-agent-sdk` |
+| `AGENT_SDK_TIMEOUT_S` | No | `300` | Per-call timeout for the Agent SDK backend, in seconds |
 | `HONCHO_ENABLED` | No | `false` | Per-person memory layer ([honcho.dev](https://honcho.dev)) — a peer card shared across all channels |
 | `HONCHO_API_KEY` | No | — | Required when `HONCHO_ENABLED=true` |
 | `HONCHO_BASE_URL` | No | — | Self-hosted Honcho endpoint |
@@ -308,8 +311,48 @@ the app refuses to start.
 See [.env.example](.env.example) for the full list.
 
 > ¹ `ANTHROPIC_API_KEY` is required only when you serve Claude models directly.
-> It can be omitted entirely if you run on local models (`LOCAL_MODELS_ENABLED`)
-> or route through OpenRouter (`OPENROUTER_ENABLED`).
+> It can be omitted entirely if you run on local models (`LOCAL_MODELS_ENABLED`),
+> route through OpenRouter (`OPENROUTER_ENABLED`), or use a Claude subscription
+> (`AGENT_SDK_ENABLED`).
+
+## Running on a Claude Subscription
+
+If you have a **Claude Pro or Max** plan, Open Executive can serve Claude calls
+through the Claude Code CLI — authenticating with the credentials from
+`claude login` — instead of a metered `ANTHROPIC_API_KEY`. Usage then draws on
+your subscription allowance.
+
+```bash
+# 1. Install the optional extra (bundles the CLI, ~95 MB)
+cd packages/core && uv sync --extra agent-sdk
+
+# 2. Log in once, interactively
+claude login
+
+# 3. In .env
+AGENT_SDK_ENABLED=true
+# ...and you can leave ANTHROPIC_API_KEY unset entirely
+```
+
+> Use `uv sync --extra agent-sdk`, **not** `uv pip install` — `sync` creates the
+> virtualenv if it doesn't exist yet, whereas `pip install` fails with
+> `No virtual environment found` on a fresh checkout.
+
+**Know the trade-offs before you switch.** The CLI runs its own agent loop, so
+this backend is not a byte-identical match for the Anthropic API:
+
+- **Rate limits are the real budget.** One cross-domain chat turn can fan out to
+  8 specialists, against your plan's 5-hour and weekly caps.
+- `max_tokens` and per-block `cache_control` are not expressible — the CLI owns
+  its own output budget and prompt cache. System blocks are flattened in order,
+  so the CLI's prefix caching still applies.
+- Prior assistant/tool-result turns are replayed as a transcript rather than as
+  structured history.
+- Anthropic server-side tools (`web_search`) are unavailable on this path.
+
+`OPENROUTER_ENABLED` takes precedence when both are on, so enabling this cannot
+silently redirect an existing OpenRouter deployment. Best suited to local
+development — a deployed, shared instance should keep using an API key.
 
 ## Running on Local Models
 

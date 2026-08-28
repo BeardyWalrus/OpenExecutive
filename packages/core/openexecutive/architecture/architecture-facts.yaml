@@ -128,6 +128,34 @@ providers:
       what: Thin delegate over anthropic.AsyncAnthropic; default for the Claude trio when OPENROUTER_ENABLED is off.
     - id: OpenRouterProvider
       what: httpx-backed client targeting OpenRouter's OpenAI-format /chat/completions endpoint. Translates request/response/stream shape via openexecutive.providers.translator.
+    - id: AgentSDKProvider
+      what: |
+        Drives the Claude Code CLI as a subprocess via the claude-agent-sdk
+        package, so Claude calls authenticate with the credentials written by
+        `claude login` and are served under a Claude Pro/Max subscription
+        allowance instead of a metered ANTHROPIC_API_KEY. Enabled with
+        AGENT_SDK_ENABLED=true; claude-agent-sdk is an optional dependency
+        (the `agent-sdk` extra) because its wheel bundles a ~95 MB CLI binary.
+        The CLI runs its own agent loop, so the adapter constrains it down to
+        one assistant turn: max_turns=1, tools=[] (no built-in Claude Code
+        Bash/Read/Edit tools), setting_sources=None + strict_mcp_config=True
+        (never inherit the developer's local .mcp.json / plugins / settings),
+        and a can_use_tool hook that denies every call so tool dispatch stays
+        with the orchestrator. Caller-supplied Anthropic tool defs are
+        re-hosted as an in-process SDK MCP server named `openexec`; the CLI
+        namespaces them as mcp__openexec__<tool>, and the adapter strips that
+        prefix off both the assembled Message and the outbound stream events.
+        NOTE: the tools must NOT be listed in allowed_tools — an allow entry
+        auto-approves a tool before can_use_tool is consulted, which lets the
+        CLI execute the stub handler instead of returning the tool_use block.
+        Likewise the deny must use interrupt=False; interrupt=True aborts the
+        session hard enough that the CLI reports a failed result. The read
+        loop stops at message_stop, which is why the CLI's own end-of-turn
+        error (max_turns reached mid-tool-call) is never surfaced.
+        include_partial_messages=True makes the CLI forward the raw Anthropic
+        stream events from its upstream call, so messages_stream reconstructs
+        genuine content_block_delta / message_delta events rather than
+        fabricating them.
   feature_gate: |
     openexecutive.providers.feature_gate.apply_feature_gates(spec, kwargs)
     runs inside the OpenRouter provider before translation. Spec-driven
@@ -152,14 +180,38 @@ providers:
     content_block_start/delta/stop events for text and assembles
     fragmented tool_call argument deltas into a single tool_use block
     at stream close.
+  agent_sdk_fidelity_caveats: |
+    The CLI surface cannot express everything messages.create accepts, so
+    this backend is deliberately NOT a byte-identical drop-in:
+    * max_tokens is not settable — the CLI owns the output budget.
+    * Per-block cache_control is not expressible. The cached system blocks
+      built by prompts/cache_manager.py are flattened into one system
+      string (order preserved, so the CLI's own prefix caching still hits).
+      Under a subscription this costs rate-limit headroom, not dollars.
+    * There is no supported way to seed a fresh CLI session with synthetic
+      assistant / tool_result turns, so prior history is replayed as a
+      delimited <conversation_history> transcript with the live user turn
+      appended after it. A lone user turn is passed through verbatim (no
+      wrapper) to avoid perturbing the CLI's prefix cache.
+    * usage.cost is None — subscription calls are not metered per request,
+      so cost dashboards can distinguish "not metered" from "free".
+    * Anthropic server-side tools (web_search) carry no input_schema and
+      cannot be re-hosted as MCP tools; they are dropped with a warning.
+    * Rate limits are the real budget: one cross-domain chat turn can fan
+      out to 8 specialists, against 5-hour / weekly subscription caps.
   routing_rules:
-    - Claude model + OPENROUTER_ENABLED=false → AnthropicProvider.
-    - Claude model + OPENROUTER_ENABLED=true → OpenRouterProvider with the curated Claude OpenRouter slugs (anthropic/claude-opus-4.7, claude-sonnet-4.6, claude-haiku-4.5).
+    - Claude model + OPENROUTER_ENABLED=false + AGENT_SDK_ENABLED=false → AnthropicProvider.
+    - Claude model + OPENROUTER_ENABLED=true → OpenRouterProvider with the curated Claude OpenRouter slugs (anthropic/claude-opus-4.7, claude-sonnet-4.6, claude-haiku-4.5). OpenRouter wins when both toggles are on, so enabling the Agent SDK cannot silently redirect an existing OpenRouter deployment.
+    - Claude model + AGENT_SDK_ENABLED=true (and OPENROUTER_ENABLED=false) → AgentSDKProvider. The repo's canonical slugs map to CLI tier aliases via registry._CLAUDE_CLI_MODELS (claude-opus-4-7 → opus, claude-sonnet-4-6 → sonnet, claude-haiku-4-5-20251001 → haiku); aliases rather than dated IDs so the map survives CLI upgrades.
     - Non-Claude model + OPENROUTER_ENABLED=true → OpenRouterProvider with the curated non-Anthropic slugs.
     - Non-Claude model + OPENROUTER_ENABLED=false → HTTP 400 at the API boundary. No silent fallback.
   council_ui_dropdown_source: |
     openexecutive.providers.allowed_models_for(agent_id) — returns
     ANTHROPIC_DIRECT_MODELS plus OPENROUTER_MODELS when the toggle is on.
+    The Claude trio is offered when ANY of ANTHROPIC_API_KEY,
+    OPENROUTER_ENABLED or AGENT_SDK_ENABLED is set, so a deployment running
+    purely on a Claude subscription (no API key at all) still surfaces
+    Claude in the dropdown.
     Every agent (including utility_fast) gets the same list; the
     utility_fast-only free/cheap OpenRouter matrix was removed. The Council
     UI dropdown (GET /agents/models?agent_id=) and the PATCH /agents/{id}

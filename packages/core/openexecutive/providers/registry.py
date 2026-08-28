@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from openexecutive.config import get_settings
+from openexecutive.providers.agent_sdk_provider import AgentSDKProvider
 from openexecutive.providers.anthropic_provider import AnthropicProvider
 from openexecutive.providers.feature_gate import FeatureSpec
 from openexecutive.providers.openai_compatible import OpenAICompatibleProvider
@@ -57,6 +58,16 @@ _CLAUDE_OPENROUTER_SLUGS: dict[str, str] = {
 }
 
 
+# Per-Claude Claude Code CLI model name. The CLI resolves the tier aliases
+# to whatever it currently ships as opus/sonnet/haiku, which keeps this map
+# correct across CLI upgrades — a pinned dated ID would rot and 400.
+_CLAUDE_CLI_MODELS: dict[str, str] = {
+    "claude-opus-4-7": "opus",
+    "claude-sonnet-4-6": "sonnet",
+    "claude-haiku-4-5-20251001": "haiku",
+}
+
+
 _CLAUDE_FEATURE_SPEC = FeatureSpec(
     supports_cache_control=True,
     supports_thinking=True,
@@ -92,14 +103,20 @@ def allowed_models() -> list[str]:
     The dropdown can't offer a model the runtime won't actually serve, so
     each family is folded in only when it's reachable:
 
-    * Anthropic-direct trio — when an ``ANTHROPIC_API_KEY`` is set, OR when
-      ``OPENROUTER_ENABLED`` is on (Claude is then reachable via OpenRouter).
+    * Anthropic-direct trio — when an ``ANTHROPIC_API_KEY`` is set, when
+      ``OPENROUTER_ENABLED`` is on (Claude is then reachable via
+      OpenRouter), or when ``AGENT_SDK_ENABLED`` is on (Claude is then
+      reachable through the logged-in Claude Code CLI).
     * OpenRouter set — when ``OPENROUTER_ENABLED`` is on.
     * Local models — when ``LOCAL_MODELS_ENABLED`` is on.
     """
     settings = get_settings()
     models: list[str] = []
-    if getattr(settings, "anthropic_api_key", None) or settings.openrouter_enabled:
+    if (
+        getattr(settings, "anthropic_api_key", None)
+        or settings.openrouter_enabled
+        or getattr(settings, "agent_sdk_enabled", False)
+    ):
         models.extend(ANTHROPIC_DIRECT_MODELS)
     if settings.openrouter_enabled:
         models.extend(OPENROUTER_MODELS)
@@ -128,6 +145,19 @@ def _is_claude(model: str) -> bool:
 _anthropic_provider: AnthropicProvider | None = None
 _openrouter_provider: OpenRouterProvider | None = None
 _local_provider: OpenAICompatibleProvider | None = None
+_agent_sdk_provider: AgentSDKProvider | None = None
+
+
+def _agent_sdk() -> AgentSDKProvider:
+    global _agent_sdk_provider
+    if _agent_sdk_provider is None:
+        settings = get_settings()
+        _agent_sdk_provider = AgentSDKProvider(
+            model_map=_CLAUDE_CLI_MODELS,
+            cli_path=getattr(settings, "agent_sdk_cli_path", None),
+            default_timeout_s=getattr(settings, "agent_sdk_timeout_s", 300.0),
+        )
+    return _agent_sdk_provider
 
 
 def _anthropic() -> AnthropicProvider:
@@ -143,8 +173,10 @@ def _anthropic() -> AnthropicProvider:
                 status_code=400,
                 detail=(
                     "A Claude model was requested but ANTHROPIC_API_KEY is not "
-                    "set. Set it, enable OpenRouter, or point the model setting "
-                    "at a configured local model."
+                    "set. Set it, enable the Claude Agent SDK "
+                    "(AGENT_SDK_ENABLED=true, after `claude login`) to use a "
+                    "Claude subscription, enable OpenRouter, or point the model "
+                    "setting at a configured local model."
                 ),
             )
         _anthropic_provider = AnthropicProvider(api_key=api_key)
@@ -217,7 +249,10 @@ def get_provider(model: str) -> LLMProvider:
     Routing rules:
 
     * Claude family — Anthropic direct by default; OpenRouter when
-      ``OPENROUTER_ENABLED`` is on.
+      ``OPENROUTER_ENABLED`` is on; the Claude Code CLI (subscription
+      auth) when ``AGENT_SDK_ENABLED`` is on. OpenRouter wins when both
+      toggles are set, so enabling the Agent SDK cannot silently redirect
+      an existing OpenRouter deployment.
     * Local models (slugs listed in ``LOCAL_MODELS`` with
       ``LOCAL_MODELS_ENABLED`` on) — the self-hosted OpenAI-compatible
       backend at ``LOCAL_BASE_URL``.
@@ -229,6 +264,8 @@ def get_provider(model: str) -> LLMProvider:
     if _is_claude(model):
         if settings.openrouter_enabled:
             return _openrouter()
+        if getattr(settings, "agent_sdk_enabled", False):
+            return _agent_sdk()
         return _anthropic()
     # Local models take precedence for their configured slugs — a local
     # endpoint can serve them with no external dependency.
@@ -251,6 +288,8 @@ def get_provider(model: str) -> LLMProvider:
 def _reset_for_tests() -> None:
     """Drop cached provider singletons. Test-only — pytest fixtures call this."""
     global _anthropic_provider, _openrouter_provider, _local_provider
+    global _agent_sdk_provider
     _anthropic_provider = None
     _openrouter_provider = None
     _local_provider = None
+    _agent_sdk_provider = None

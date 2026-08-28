@@ -157,6 +157,33 @@ class Settings(BaseSettings):
             )
         return self
 
+    # ---- Claude Agent SDK (subscription auth) ---------------------------
+    # Route Claude calls through the Claude Code CLI via the Claude Agent
+    # SDK, which authenticates with the credentials written by
+    # `claude login`. For a Claude Pro / Max subscriber that serves model
+    # calls under the subscription allowance instead of a metered
+    # ANTHROPIC_API_KEY. Default OFF so a fresh checkout is unchanged.
+    #
+    # Trade-offs vs. the Anthropic-direct backend (the CLI owns its own
+    # agent loop, so some request fields have no equivalent):
+    #   - max_tokens and per-block cache_control are not expressible
+    #   - prior assistant/tool_result turns are replayed as transcript text
+    #   - usage counts toward the subscription's rate limits, and this app
+    #     fans out up to 8 specialists per turn
+    #
+    # Requires: `uv sync --extra agent-sdk` (from packages/core) and a
+    # logged-in CLI (`claude login`). `uv sync` is what creates the venv,
+    # so it works on a fresh checkout; `uv pip install` needs one already.
+    # Takes precedence over the Anthropic-direct
+    # backend for Claude models; OPENROUTER_ENABLED still wins over both.
+    agent_sdk_enabled: bool = Field(False, alias="AGENT_SDK_ENABLED")
+    # Explicit path to the `claude` executable. Leave unset to use the CLI
+    # bundled with the claude-agent-sdk wheel (or the one on PATH).
+    agent_sdk_cli_path: str | None = Field(None, alias="AGENT_SDK_CLI_PATH")
+    # Per-call wall-clock cap. Generous: the CLI adds subprocess startup on
+    # top of model latency, and a deep-reasoning specialist turn is slow.
+    agent_sdk_timeout_s: float = Field(300.0, alias="AGENT_SDK_TIMEOUT_S")
+
     @model_validator(mode="after")
     def _validate_provider_available(self) -> "Settings":
         # At least one backend must be reachable, or every model call fails.
@@ -164,11 +191,14 @@ class Settings(BaseSettings):
             self.anthropic_api_key
             or self.openrouter_enabled
             or self.local_models_enabled
+            or self.agent_sdk_enabled
         ):
             raise ValueError(
                 "No LLM provider configured. Set ANTHROPIC_API_KEY, or enable "
-                "OpenRouter (OPENROUTER_ENABLED=true + OPENROUTER_API_KEY), or "
-                "enable local models (LOCAL_MODELS_ENABLED=true + LOCAL_BASE_URL)."
+                "the Claude Agent SDK (AGENT_SDK_ENABLED=true, after "
+                "`claude login`), or enable OpenRouter (OPENROUTER_ENABLED=true "
+                "+ OPENROUTER_API_KEY), or enable local models "
+                "(LOCAL_MODELS_ENABLED=true + LOCAL_BASE_URL)."
             )
         return self
 
