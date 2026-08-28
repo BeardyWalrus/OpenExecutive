@@ -352,6 +352,15 @@ AGENT_SDK_ENABLED=true
 > At runtime the provider finds the bundled CLI on its own, so
 > `AGENT_SDK_CLI_PATH` only needs setting if you want to point at a *different*
 > `claude` binary.
+>
+> - A plain `make install` (or `uv sync`) **prunes** the optional extra, since
+>   `uv sync` makes the environment match exactly the selected dependency set.
+>   Re-add it with `make install-agent-sdk`, or install both at once with
+>   `make install UV_EXTRAS="--extra agent-sdk"`.
+
+First-time setup also needs the UI dependencies — `make install` covers both
+packages, and `make dev` only *starts* the servers. Next.js 16 requires
+Node.js >= 20.9.
 
 **Know the trade-offs before you switch.** The CLI runs its own agent loop, so
 this backend is not a byte-identical match for the Anthropic API:

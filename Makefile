@@ -1,8 +1,20 @@
-.PHONY: dev stop test lint eval docker clean install discord
+.PHONY: dev stop test lint eval docker clean install install-agent-sdk discord
+
+# UV_EXTRAS lets you pull in optional Python extras, e.g.
+#   make install UV_EXTRAS="--extra agent-sdk"
+# Without it, `uv sync` installs exactly the base dependency set and PRUNES
+# anything else — including a previously installed `agent-sdk` extra.
+UV_EXTRAS ?=
 
 install:
-	cd packages/core && uv sync
+	cd packages/core && uv sync $(UV_EXTRAS)
 	cd packages/ui && npm install
+
+# Claude subscription backend (AGENT_SDK_ENABLED=true) — see README,
+# "Running on a Claude Subscription". Run this after a plain `make install`,
+# which prunes the extra.
+install-agent-sdk:
+	cd packages/core && uv sync --extra agent-sdk
 
 dev:
 	@echo "Starting Open Executive..."
