@@ -2,7 +2,7 @@
 
 The backend drives the Claude Code CLI as a subprocess, so these tests
 stand in a fake ``claude_agent_sdk`` module rather than launching a real
-CLI (which would need an interactive `claude login` and would bill a real
+CLI (which would need an interactive `claude auth login` and would bill a real
 subscription). What is verified here is everything the adapter itself owns:
 
 * the Anthropic-shape request is translated into ``ClaudeAgentOptions``

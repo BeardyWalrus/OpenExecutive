@@ -160,7 +160,7 @@ class Settings(BaseSettings):
     # ---- Claude Agent SDK (subscription auth) ---------------------------
     # Route Claude calls through the Claude Code CLI via the Claude Agent
     # SDK, which authenticates with the credentials written by
-    # `claude login`. For a Claude Pro / Max subscriber that serves model
+    # `claude auth login`. For a Claude Pro / Max subscriber that serves model
     # calls under the subscription allowance instead of a metered
     # ANTHROPIC_API_KEY. Default OFF so a fresh checkout is unchanged.
     #
@@ -172,8 +172,10 @@ class Settings(BaseSettings):
     #     fans out up to 8 specialists per turn
     #
     # Requires: `uv sync --extra agent-sdk` (from packages/core) and a
-    # logged-in CLI (`claude login`). `uv sync` is what creates the venv,
-    # so it works on a fresh checkout; `uv pip install` needs one already.
+    # logged-in CLI. `uv sync` is what creates the venv, so it works on a
+    # fresh checkout; `uv pip install` needs one already. Note the SDK
+    # bundles the CLI inside site-packages but puts no `claude` on PATH —
+    # see README "Running on a Claude Subscription" for the login step.
     # Takes precedence over the Anthropic-direct
     # backend for Claude models; OPENROUTER_ENABLED still wins over both.
     agent_sdk_enabled: bool = Field(False, alias="AGENT_SDK_ENABLED")
@@ -196,7 +198,7 @@ class Settings(BaseSettings):
             raise ValueError(
                 "No LLM provider configured. Set ANTHROPIC_API_KEY, or enable "
                 "the Claude Agent SDK (AGENT_SDK_ENABLED=true, after "
-                "`claude login`), or enable OpenRouter (OPENROUTER_ENABLED=true "
+                "`claude auth login`), or enable OpenRouter (OPENROUTER_ENABLED=true "
                 "+ OPENROUTER_API_KEY), or enable local models "
                 "(LOCAL_MODELS_ENABLED=true + LOCAL_BASE_URL)."
             )

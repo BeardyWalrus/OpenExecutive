@@ -174,7 +174,7 @@ def _anthropic() -> AnthropicProvider:
                 detail=(
                     "A Claude model was requested but ANTHROPIC_API_KEY is not "
                     "set. Set it, enable the Claude Agent SDK "
-                    "(AGENT_SDK_ENABLED=true, after `claude login`) to use a "
+                    "(AGENT_SDK_ENABLED=true, after `claude auth login`) to use a "
                     "Claude subscription, enable OpenRouter, or point the model "
                     "setting at a configured local model."
                 ),

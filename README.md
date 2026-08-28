@@ -319,24 +319,39 @@ See [.env.example](.env.example) for the full list.
 
 If you have a **Claude Pro or Max** plan, Open Executive can serve Claude calls
 through the Claude Code CLI — authenticating with the credentials from
-`claude login` — instead of a metered `ANTHROPIC_API_KEY`. Usage then draws on
-your subscription allowance.
+`claude auth login` — instead of a metered `ANTHROPIC_API_KEY`. Usage then draws
+on your subscription allowance.
 
 ```bash
 # 1. Install the optional extra (bundles the CLI, ~95 MB)
 cd packages/core && uv sync --extra agent-sdk
 
-# 2. Log in once, interactively
-claude login
+# 2. Log in once, interactively.
+#    The SDK bundles the CLI inside site-packages but does NOT put `claude`
+#    on your PATH, so resolve the bundled binary first:
+CLAUDE_BIN=$(uv run python -c "import claude_agent_sdk, pathlib; print(pathlib.Path(claude_agent_sdk.__file__).parent / '_bundled' / 'claude')")
+"$CLAUDE_BIN" auth login
+"$CLAUDE_BIN" auth status      # expect: "loggedIn": true
 
 # 3. In .env
 AGENT_SDK_ENABLED=true
 # ...and you can leave ANTHROPIC_API_KEY unset entirely
 ```
 
-> Use `uv sync --extra agent-sdk`, **not** `uv pip install` — `sync` creates the
-> virtualenv if it doesn't exist yet, whereas `pip install` fails with
-> `No virtual environment found` on a fresh checkout.
+> **Two gotchas worth knowing up front:**
+>
+> - Use `uv sync --extra agent-sdk`, **not** `uv pip install` — `sync` creates
+>   the virtualenv if it doesn't exist yet, whereas `pip install` fails with
+>   `No virtual environment found` on a fresh checkout.
+> - The command is `claude auth login`, **not** `claude login` (there is no
+>   `login` subcommand). And a bare `claude` will be *command not found* unless
+>   you have Claude Code installed separately — installing the Python SDK does
+>   not add it to your PATH. If you do already have Claude Code on your PATH,
+>   just run `claude auth login` and skip the `CLAUDE_BIN` dance.
+>
+> At runtime the provider finds the bundled CLI on its own, so
+> `AGENT_SDK_CLI_PATH` only needs setting if you want to point at a *different*
+> `claude` binary.
 
 **Know the trade-offs before you switch.** The CLI runs its own agent loop, so
 this backend is not a byte-identical match for the Anthropic API:

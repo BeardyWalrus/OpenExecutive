@@ -2,7 +2,7 @@
 
 Why this exists: the Anthropic-direct and OpenRouter backends both bill
 per token against an API key. The Agent SDK instead drives the Claude Code
-CLI, which authenticates with the credentials written by ``claude login``.
+CLI, which authenticates with the credentials written by ``claude auth login``.
 For a Claude Pro / Max subscriber that means model calls are served under
 the subscription's usage allowance rather than a metered API key.
 
@@ -414,7 +414,7 @@ class AgentSDKProvider:
             "include_partial_messages": True,
             "can_use_tool": self._deny_tool,
             # An empty value reads as unset to the CLI, forcing it onto the
-            # subscription credentials from `claude login` even when the
+            # subscription credentials from `claude auth login` even when the
             # shell (or .env) exports a key for the other backends.
             "env": {"ANTHROPIC_API_KEY": "", "ANTHROPIC_AUTH_TOKEN": ""},
         }

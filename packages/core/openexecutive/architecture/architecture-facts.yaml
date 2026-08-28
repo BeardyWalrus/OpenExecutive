@@ -132,7 +132,7 @@ providers:
       what: |
         Drives the Claude Code CLI as a subprocess via the claude-agent-sdk
         package, so Claude calls authenticate with the credentials written by
-        `claude login` and are served under a Claude Pro/Max subscription
+        `claude auth login` and are served under a Claude Pro/Max subscription
         allowance instead of a metered ANTHROPIC_API_KEY. Enabled with
         AGENT_SDK_ENABLED=true; claude-agent-sdk is an optional dependency
         (the `agent-sdk` extra) because its wheel bundles a ~95 MB CLI binary.
