@@ -115,6 +115,21 @@ make dev
 
 Open http://localhost:3000 to start chatting with your executive. The API runs on port 8000 and the UI on 3000.
 
+> **Ports already in use?** Override either:
+>
+> ```bash
+> make dev API_PORT=8001            # API on 8001, UI still on 3000
+> make dev API_PORT=8001 UI_PORT=3001
+> ```
+>
+> `make dev` points the UI's `BACKEND_BASE_URL` at `API_PORT` for you — the
+> browser talks to the Next server, which proxies `/api/backend` to the API,
+> so both sides have to agree. `make stop` takes the same variables.
+>
+> If a stale server is holding a port, `make stop` frees both. It backgrounds
+> uvicorn with `&`, so an API started by an earlier `make dev` outlives a
+> failed UI start and even a closed terminal.
+
 > **First run:** requires Python 3.11+ and Node 22+. The initial `uv sync` pulls heavy
 > ML dependencies (ChromaDB + sentence-transformers/PyTorch), and the first boot
 > downloads a small embedding model (~90 MB) to build the local vector index — so the
