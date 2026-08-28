@@ -344,6 +344,19 @@ class Settings(BaseSettings):
             return [int(x.strip()) for x in v.split(",") if x.strip()]
         return []
 
+    @field_validator("discord_notify_channel_id", mode="before")
+    @classmethod
+    def _parse_notify_channel_id(cls, v: Any) -> Any:
+        # `.env.example` ships this key blank, and dotenv hands a blank line
+        # through as "" rather than omitting it — which pydantic then refuses
+        # to parse as an int, so merely copying the example file crashed
+        # startup. Treat blank as "unset", matching the None default.
+        # `_parse_guild_ids` above already does this for the sibling list
+        # field; this is the same contract for the scalar.
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     google_chat_service_account_file: str | None = Field(
         None, alias="GOOGLE_CHAT_SERVICE_ACCOUNT_FILE"
     )
