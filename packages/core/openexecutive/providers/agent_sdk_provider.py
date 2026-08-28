@@ -77,7 +77,7 @@ def _require_sdk() -> Any:
     except ImportError as exc:  # pragma: no cover - depends on install extras
         raise AgentSDKUnavailableError(
             "AGENT_SDK_ENABLED=true requires the claude-agent-sdk package. "
-            "Install it with: uv pip install 'claude-agent-sdk>=0.2.0'"
+            "Install it from packages/core with: uv sync --extra agent-sdk"
         ) from exc
     return claude_agent_sdk
 

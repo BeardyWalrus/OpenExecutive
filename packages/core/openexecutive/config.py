@@ -171,8 +171,10 @@ class Settings(BaseSettings):
     #   - usage counts toward the subscription's rate limits, and this app
     #     fans out up to 8 specialists per turn
     #
-    # Requires: `uv pip install 'claude-agent-sdk>=0.2.0'` and a logged-in
-    # CLI (`claude login`). Takes precedence over the Anthropic-direct
+    # Requires: `uv sync --extra agent-sdk` (from packages/core) and a
+    # logged-in CLI (`claude login`). `uv sync` is what creates the venv,
+    # so it works on a fresh checkout; `uv pip install` needs one already.
+    # Takes precedence over the Anthropic-direct
     # backend for Claude models; OPENROUTER_ENABLED still wins over both.
     agent_sdk_enabled: bool = Field(False, alias="AGENT_SDK_ENABLED")
     # Explicit path to the `claude` executable. Leave unset to use the CLI
