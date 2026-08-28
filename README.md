@@ -130,6 +130,28 @@ Open http://localhost:3000 to start chatting with your executive. The API runs o
 > uvicorn with `&`, so an API started by an earlier `make dev` outlives a
 > failed UI start and even a closed terminal.
 
+> **Reaching it from another device.** `next dev` already binds every
+> interface, so the UI is on your LAN at `http://<your-ip>:3000` with no
+> change — and its server-side proxy reaches the API over loopback, so the API
+> does not need exposing. What blocks a second device is sign-in: every page is
+> gated by Google OAuth, and Google will not accept a private IP as a redirect
+> URI. An SSH tunnel from the other machine keeps you on `localhost`, which
+> Google does allow:
+>
+> ```bash
+> ssh -N -L 3000:localhost:3000 <user>@<host-ip>   # then browse localhost:3000
+> ```
+>
+> For a durable setup, put the UI on a hostname with real HTTPS (Tailscale
+> Funnel, cloudflared, ngrok), set `AUTH_URL` to that origin with
+> `AUTH_TRUST_HOST=true`, and register `<origin>/api/auth/callback/google` in
+> the Google OAuth client.
+>
+> `API_HOST=0.0.0.0` exposes the API itself, for when something other than the
+> UI must call it directly. The API has **no authentication** unless
+> `BACKEND_SHARED_SECRET` is set, so set that first — otherwise anyone on the
+> network can read your company data and spend your model quota.
+
 > **First run:** requires Python 3.11+ and Node 22+. The initial `uv sync` pulls heavy
 > ML dependencies (ChromaDB + sentence-transformers/PyTorch), and the first boot
 > downloads a small embedding model (~90 MB) to build the local vector index — so the

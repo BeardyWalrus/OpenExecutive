@@ -15,6 +15,18 @@ UV_EXTRAS ?=
 API_PORT ?= 8000
 UI_PORT  ?= 3000
 
+# Bind address for the API. Default 127.0.0.1 — reachable only from this
+# machine. `next dev` already binds all interfaces, so the UI is on your LAN
+# at http://<your-ip>:$(UI_PORT) without changing anything here, and its
+# server-side proxy reaches the API over loopback either way.
+#
+# Only set API_HOST=0.0.0.0 if something other than the UI must reach the API
+# directly (a phone hitting /chat, another host running the eval suite). The
+# API has NO auth unless BACKEND_SHARED_SECRET is set, so exposing it hands
+# anyone on the network your company data and your model spend. Set that
+# secret first.
+API_HOST ?= 127.0.0.1
+
 install:
 	cd packages/core && uv sync $(UV_EXTRAS)
 	cd packages/ui && npm install
@@ -26,8 +38,8 @@ install-agent-sdk:
 	cd packages/core && uv sync --extra agent-sdk
 
 dev:
-	@echo "Starting Open Executive (API :$(API_PORT), UI :$(UI_PORT))..."
-	@cd packages/core && uv run uvicorn openexecutive.api.main:app --reload --port $(API_PORT) &
+	@echo "Starting Open Executive (API $(API_HOST):$(API_PORT), UI :$(UI_PORT))..."
+	@cd packages/core && uv run uvicorn openexecutive.api.main:app --reload --host $(API_HOST) --port $(API_PORT) &
 	@cd packages/ui && BACKEND_BASE_URL=http://localhost:$(API_PORT) npm run dev -- --port $(UI_PORT)
 
 # Verify the dev ports are actually free, and fail loudly if they are not.
