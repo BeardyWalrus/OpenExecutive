@@ -516,6 +516,31 @@ eight specialists.
 > `BACKEND_SHARED_SECRET` is set. Set that secret on **both** services if you
 > expose it.
 
+### Running with no sign-in at all
+
+Google's redirect-URI rules (HTTPS required, raw IPs rejected) make a plain LAN
+install awkward. For a **single-user install on a network you trust**, you can
+turn sign-in off entirely:
+
+```bash
+DISABLE_AUTH=true
+```
+
+Then `http://<host-ip>:3000` just works — no tunnel, no HTTPS, no Google client,
+and `AUTH_SECRET` / `AUTH_GOOGLE_*` are unused.
+
+Requests then carry no verified identity, so the backend resolves the caller to
+the **principal Person** — the same path the CLI and direct `curl` already use
+(`api/routes/chat.py::_resolve_caller_person_id`). For one user that is exactly
+right; per-person features (Honcho peer memory, per-user `/today` filtering)
+collapse to the principal rather than breaking.
+
+> **There is no second gate behind this.** Anyone who can reach the port is the
+> executive: your company documents, memory, audit log and model spend. Do not
+> expose that port to the internet, and remember a VPN or Tailscale guest counts
+> as "can reach the port". The server logs a warning on every start while it is
+> on. For multi-user, keep Google sign-in.
+
 ### Google sign-in on a Docker host
 
 Every page is gated by Google OAuth, and Google's redirect-URI rules decide what

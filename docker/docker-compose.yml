@@ -55,6 +55,10 @@ services:
       # "There was a problem with the server configuration" / MissingSecret;
       # without the Google pair there is no provider to sign in with. These
       # reach the container only because `make docker` passes --env-file.
+      # DISABLE_AUTH=true turns sign-in OFF entirely — every visitor is served
+      # as the principal. The way to run on a LAN IP without Google's
+      # HTTPS/no-raw-IP redirect rules. Trusted networks only.
+      - DISABLE_AUTH=${DISABLE_AUTH:-false}
       - AUTH_SECRET=${AUTH_SECRET:-}
       - AUTH_GOOGLE_ID=${AUTH_GOOGLE_ID:-}
       - AUTH_GOOGLE_SECRET=${AUTH_GOOGLE_SECRET:-}
