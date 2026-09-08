@@ -67,7 +67,7 @@ install-agent-sdk:
 # naming the process in the way — the error message is otherwise the only
 # clue, and it names neither the port nor the owner.
 dev: link-env
-	@python3 -c "$$PORT_SCAN" preflight $(API_PORT) $(UI_PORT)
+	@python3 -c "$$PORT_SCAN" preflight "$(API_PORT)" "$(UI_PORT)"
 	@echo "Starting Open Executive (API $(API_HOST):$(API_PORT), UI :$(UI_PORT))..."
 	@cd packages/core && uv run uvicorn openexecutive.api.main:app --reload --host $(API_HOST) --port $(API_PORT) &
 	@cd packages/ui && $(UI_DEV_ENV) BACKEND_BASE_URL=http://localhost:$(API_PORT) npm run dev -- $(UI_DEV_FLAGS) --port $(UI_PORT)
@@ -153,7 +153,35 @@ def describe(busy):
             lines.append("  port %d is held by a process this user cannot inspect" % port)
     return lines
 
-mode, ports = sys.argv[1], [int(a) for a in sys.argv[2:]]
+def usage(problem):
+    """Refuse rather than guess.
+
+    The ports arrive positionally through the shell, so a Make variable that
+    expands to nothing (`make dev API_PORT=`) silently shifts everything left:
+    the surviving number gets read as API_PORT when it was UI_PORT, and with
+    both blank the scan runs against an empty port set and reports success no
+    matter what is actually listening. That is precisely the "killed nothing
+    and still said Stopped." failure this check exists to end, so validate
+    before trusting the arguments.
+    """
+    sys.exit(
+        "PORT_SCAN: %s\nUsage: PORT_SCAN preflight|stop <api_port> <ui_port>\n"
+        "Got: %r\nCheck that API_PORT and UI_PORT are set to real port numbers."
+        % (problem, sys.argv[1:])
+    )
+
+mode, raw = (sys.argv[1] if len(sys.argv) > 1 else ""), sys.argv[2:]
+if mode not in ("preflight", "stop"):
+    usage("unknown mode %r" % mode)
+if len(raw) != 2:
+    usage("expected exactly 2 ports, got %d" % len(raw))
+try:
+    ports = [int(a) for a in raw]
+except ValueError:
+    usage("ports must be integers")
+if not all(0 < port < 65536 for port in ports):
+    usage("ports must be in 1-65535")
+
 busy = listening(set(ports))
 
 if mode == "preflight":
@@ -198,7 +226,7 @@ stop:
 	@-command -v lsof >/dev/null 2>&1 && lsof -ti:$(API_PORT) -ti:$(UI_PORT) 2>/dev/null | xargs -r kill -9 2>/dev/null || true
 	@-command -v fuser >/dev/null 2>&1 && fuser -k $(API_PORT)/tcp $(UI_PORT)/tcp >/dev/null 2>&1 || true
 	@sleep 1
-	@python3 -c "$$PORT_SCAN" stop $(API_PORT) $(UI_PORT)
+	@python3 -c "$$PORT_SCAN" stop "$(API_PORT)" "$(UI_PORT)"
 
 test:
 	cd packages/core && uv run pytest tests/ -v --tb=short
