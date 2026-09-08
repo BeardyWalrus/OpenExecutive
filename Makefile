@@ -60,7 +60,14 @@ link-env:
 install-agent-sdk:
 	cd packages/core && uv sync --extra agent-sdk
 
+# The API is backgrounded with `&`, so make cannot see it fail: a port clash
+# kills uvicorn with "[Errno 98] Address already in use" while the UI starts
+# anyway, and you get a working web app whose every request fails against a
+# backend that never came up. Check both ports first and refuse to start,
+# naming the process in the way — the error message is otherwise the only
+# clue, and it names neither the port nor the owner.
 dev: link-env
+	@python3 -c "$$PORT_SCAN" preflight $(API_PORT) $(UI_PORT)
 	@echo "Starting Open Executive (API $(API_HOST):$(API_PORT), UI :$(UI_PORT))..."
 	@cd packages/core && uv run uvicorn openexecutive.api.main:app --reload --host $(API_HOST) --port $(API_PORT) &
 	@cd packages/ui && $(UI_DEV_ENV) BACKEND_BASE_URL=http://localhost:$(API_PORT) npm run dev -- $(UI_DEV_FLAGS) --port $(UI_PORT)
@@ -91,24 +98,87 @@ dev-wasm:
 # unconditionally, so on a machine without lsof (most minimal Ubuntu installs)
 # it killed nothing and still reported success — the next `make dev` then died
 # with "Address already in use" and no clue why.
-define STOP_CHECK
-import socket, sys
-busy = []
-for port in ($(API_PORT), $(UI_PORT)):
-    sock = socket.socket()
-    sock.settimeout(0.3)
-    if sock.connect_ex(("127.0.0.1", port)) == 0:
-        busy.append(port)
-    sock.close()
-if busy:
+define PORT_SCAN
+import os, sys
+
+LISTEN = "0A"
+
+def listening(ports):
+    """Which of `ports` are in LISTEN state, and the socket inodes holding them.
+
+    Read from /proc rather than shelling out: lsof is absent on most minimal
+    Ubuntu installs and ss is not guaranteed either, and this has to work on
+    the machine that is already broken.
+    """
+    busy = {}
+    for path in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            rows = open(path).read().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            f = row.split()
+            if len(f) < 10 or f[3] != LISTEN:
+                continue
+            port = int(f[1].split(":")[1], 16)
+            if port in ports:
+                busy.setdefault(port, set()).add(f[9])
+    return busy
+
+def owner(inodes):
+    """The pid and command line holding one of these socket inodes."""
+    want = {"socket:[%s]" % i for i in inodes}
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            fds = os.listdir("/proc/%s/fd" % pid)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                if os.readlink("/proc/%s/fd/%s" % (pid, fd)) in want:
+                    raw = open("/proc/%s/cmdline" % pid).read().replace(chr(0), " ")
+                    cmd = " ".join(raw.split())
+                    return pid, (cmd or "unknown")[:120]
+            except OSError:
+                continue
+    return None, None
+
+def describe(busy):
+    lines = []
+    for port in sorted(busy):
+        pid, cmd = owner(busy[port])
+        if pid:
+            lines.append("  port %d is held by pid %s: %s" % (port, pid, cmd))
+        else:
+            lines.append("  port %d is held by a process this user cannot inspect" % port)
+    return lines
+
+mode, ports = sys.argv[1], [int(a) for a in sys.argv[2:]]
+busy = listening(set(ports))
+
+if mode == "preflight":
+    if busy:
+        stop = " ".join(
+            "%s=%d" % (name, port)
+            for name, port in (("API_PORT", ports[0]), ("UI_PORT", ports[1]))
+            if port in busy
+        )
+        sys.exit(
+            "Refusing to start — something already holds:\n"
+            + "\n".join(describe(busy))
+            + "\n\nFree it with:  make stop " + stop
+            + "\nOr pick other ports:  make dev API_PORT=... UI_PORT=..."
+        )
+elif busy:
     sys.exit(
-        "Could not free port(s): "
-        + ", ".join(str(p) for p in busy)
-        + " - find the owner with: ss -ltnp | grep -E ':($(API_PORT)|$(UI_PORT))'"
+        "Could not free:\n"
+        + "\n".join(describe(busy))
+        + "\n\nThat process is not ours to kill by name; stop it directly."
     )
-print("Stopped.")
+else:
+    print("Stopped.")
 endef
-export STOP_CHECK
+export PORT_SCAN
 
 # Kill by process name first (procps is always present), then by port with
 # whichever tool exists. `make dev` backgrounds uvicorn with `&`, so it
@@ -128,7 +198,7 @@ stop:
 	@-command -v lsof >/dev/null 2>&1 && lsof -ti:$(API_PORT) -ti:$(UI_PORT) 2>/dev/null | xargs -r kill -9 2>/dev/null || true
 	@-command -v fuser >/dev/null 2>&1 && fuser -k $(API_PORT)/tcp $(UI_PORT)/tcp >/dev/null 2>&1 || true
 	@sleep 1
-	@python3 -c "$$STOP_CHECK"
+	@python3 -c "$$PORT_SCAN" stop $(API_PORT) $(UI_PORT)
 
 test:
 	cd packages/core && uv run pytest tests/ -v --tb=short
