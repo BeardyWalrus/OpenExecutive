@@ -14,12 +14,16 @@ export const dynamic = "force-dynamic";
 
 const BACKEND_BASE = process.env.BACKEND_BASE_URL ?? "http://localhost:8000";
 const BACKEND_SHARED_SECRET = process.env.BACKEND_SHARED_SECRET ?? "";
+// See middleware.ts. With auth off there is no session to verify and no
+// verified email to stamp, so the backend resolves the caller to the
+// principal Person — correct for the single-user install this is meant for.
+const AUTH_DISABLED = process.env.DISABLE_AUTH === "true";
 
 async function proxy(req: NextRequest, params: { path: string[] }): Promise<Response> {
   // Belt-and-suspenders: middleware should have already rejected unauthenticated
   // traffic, but check here too so a stray client can't reach the backend.
-  const session = await auth();
-  if (!session?.user) {
+  const session = AUTH_DISABLED ? null : await auth();
+  if (!AUTH_DISABLED && !session?.user) {
     return new Response(JSON.stringify({ error: "unauthorized" }), {
       status: 401,
       headers: { "content-type": "application/json" },
@@ -66,7 +70,9 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   // filtering on /audit, /today, etc.). Source: the verified NextAuth
   // session — clients have no way to set this themselves (stripped
   // above).
-  const callerEmail = session.user.email?.toLowerCase();
+  // Deliberately left unstamped when AUTH_DISABLED: an unverified identity is
+  // worse than none, and the backend's no-header path is the well-defined one.
+  const callerEmail = session?.user?.email?.toLowerCase();
   if (callerEmail) {
     headers.set("x-caller-email", callerEmail);
   }

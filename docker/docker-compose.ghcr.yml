@@ -61,6 +61,10 @@ services:
       # --- Google sign-in -------------------------------------------------
       # AUTH_SECRET: openssl rand -base64 32. Without it every request fails
       # with "There was a problem with the server configuration".
+      # DISABLE_AUTH=true turns sign-in OFF entirely — every visitor is served
+      # as the principal. The way to run on a LAN IP without Google's
+      # HTTPS/no-raw-IP redirect rules. Trusted networks only.
+      - DISABLE_AUTH=${DISABLE_AUTH:-false}
       - AUTH_SECRET=${AUTH_SECRET:-}
       - AUTH_GOOGLE_ID=${AUTH_GOOGLE_ID:-}
       - AUTH_GOOGLE_SECRET=${AUTH_GOOGLE_SECRET:-}
