@@ -162,6 +162,27 @@ Open http://localhost:3000 to start chatting with your executive. The API runs o
 > is not enough on its own, since Next re-downloads it into `~/.cache/next-swc`
 > unless `NEXT_TEST_WASM=1` forces the WASM loader.
 
+> **Reaching a dev server from another machine?** Set `ALLOWED_DEV_ORIGINS` to
+> the host you browse to:
+>
+> ```bash
+> ALLOWED_DEV_ORIGINS=192.168.1.50
+> ```
+>
+> `next dev` blocks cross-origin requests to its `/_next/*` resources by
+> default. Without this the HTML loads but the client bundle does not, so the
+> page never hydrates and freezes on whatever the server rendered — a component
+> showing "Loading…" stays there, with only a console warning to explain it.
+> Dev-only; `next start` serves no dev resources and ignores it.
+>
+> For a machine you leave running, prefer production mode instead — it skips
+> dev-mode entirely and compiles once rather than per request:
+>
+> ```bash
+> cd packages/ui && NEXT_TEST_WASM=1 npm run build -- --webpack   # drop NEXT_TEST_WASM if native SWC works
+> BACKEND_BASE_URL=http://localhost:8000 npx next start --port 3000
+> ```
+
 > **Ports already in use?** Override either:
 >
 > ```bash
