@@ -12,6 +12,7 @@ const ALLOWED_EMAILS_FALLBACK: ReadonlySet<string> = new Set(
     .filter((e) => e.length > 0),
 );
 
+const AUTH_DISABLED = process.env.DISABLE_AUTH === "true";
 const BACKEND_BASE = process.env.BACKEND_BASE_URL ?? "http://localhost:8000";
 const BACKEND_SHARED_SECRET = process.env.BACKEND_SHARED_SECRET ?? "";
 
@@ -95,6 +96,26 @@ function auditAuth(
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [Google],
+  // Auth.js refuses a request whose Host it does not trust, so on a LAN IP
+  // /api/auth/session returns 500 (UntrustedHost) — and because
+  // components/UserBadge.tsx renders "Loading…" until useSession() settles,
+  // the UI hangs there forever rather than showing an error.
+  //
+  // With DISABLE_AUTH there is no sign-in to protect and no callback URL to
+  // forge, so host trust is moot: trust it and let the session endpoint answer
+  // (with no session) instead of failing. undefined leaves the normal case
+  // exactly as it was, driven by AUTH_TRUST_HOST.
+  trustHost: AUTH_DISABLED ? true : undefined,
+  // Same reasoning for the secret. Auth.js refuses to answer /api/auth/session
+  // without one (MissingSecret), which leaves useSession() stuck at "loading"
+  // — so a DISABLE_AUTH install would have to set AUTH_SECRET purely to
+  // satisfy a subsystem it has switched off. With sign-in disabled no session
+  // is ever issued, so this placeholder signs nothing; a real AUTH_SECRET is
+  // still preferred if one is set. undefined leaves the normal case untouched,
+  // where a missing secret must keep failing loudly.
+  secret: AUTH_DISABLED
+    ? (process.env.AUTH_SECRET || "openexec-auth-disabled-placeholder")
+    : undefined,
   // 24h JWT TTL. Defence in depth alongside the `authorized` re-check
   // below — a session that somehow drifts out of sync with the roster
   // is corrected on next access, but also naturally expires within a

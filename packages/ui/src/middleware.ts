@@ -26,8 +26,14 @@ if (AUTH_DISABLED) {
 // Gate every page + non-auth API route. `auth` from NextAuth v5 wraps a
 // handler that injects req.auth; here we use it directly as middleware, which
 // makes unauthenticated requests redirect to the configured sign-in page.
-export default auth((req) => {
-  if (AUTH_DISABLED) return;
+// Note the shape: the bypass replaces the `auth()` wrapper rather than
+// returning early inside it. `auth()` runs Auth.js internals — including its
+// UntrustedHost check — BEFORE the handler body executes, so an early return
+// inside the handler still threw on a LAN host. Nothing here touches Auth.js
+// when disabled.
+export default AUTH_DISABLED
+  ? () => undefined
+  : auth((req) => {
   if (req.auth) return;
 
   // For API routes, return JSON 401 instead of an HTML redirect so the
