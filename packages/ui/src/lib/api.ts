@@ -47,7 +47,11 @@ function detailFrom(body: string, statusText: string): string {
       .join("; ")
       .slice(0, MAX_DETAIL_CHARS);
   }
-  return text.slice(0, MAX_DETAIL_CHARS);
+  // JSON we don't recognise: everything that answers this client — FastAPI and
+  // the backend proxy alike — uses `detail`, so an envelope without one is
+  // some other layer's internals. Echoing it raw would put whatever it happens
+  // to contain on screen; statusText says as much and reveals nothing.
+  return statusText;
 }
 
 /**

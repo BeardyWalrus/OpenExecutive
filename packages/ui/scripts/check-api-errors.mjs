@@ -84,6 +84,12 @@ try {
       expect: (e) => e.message === "Failed to start onboarding (HTTP 503): upstream connect error",
     },
     {
+      name: "an unrecognised JSON envelope is not echoed raw",
+      res: () => json({ error: "psycopg2 failed at /srv/app/db/pool.py" }, 500, "Internal Server Error"),
+      call: startOnboarding,
+      expect: (e) => e.message === "Failed to start onboarding (HTTP 500): Internal Server Error",
+    },
+    {
       name: "an oversized body is truncated",
       res: () => new Response("x".repeat(5000), { status: 500, statusText: "Internal Server Error" }),
       call: startOnboarding,

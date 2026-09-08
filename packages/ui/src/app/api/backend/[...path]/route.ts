@@ -19,6 +19,15 @@ const BACKEND_SHARED_SECRET = process.env.BACKEND_SHARED_SECRET ?? "";
 // principal Person — correct for the single-user install this is meant for.
 const AUTH_DISABLED = process.env.DISABLE_AUTH === "true";
 
+// Strip `user:pass@` out of any URL embedded in a string. Node echoes the URL
+// it was given back in its own error text — "Request cannot be constructed
+// from a URL that includes credentials: http://svc:s3cr3t@host" — so scrubbing
+// BACKEND_BASE_URL alone is not enough to keep a credential out of the error
+// we return and log.
+function redactUserinfo(text: string): string {
+  return text.replace(/\/\/[^/@\s]+:[^/@\s]*@/g, "//***@");
+}
+
 async function proxy(req: NextRequest, params: { path: string[] }): Promise<Response> {
   // Belt-and-suspenders: middleware should have already rejected unauthenticated
   // traffic, but check here too so a stray client can't reach the backend.
@@ -93,8 +102,13 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   // an opaque Next.js 500 whose body is an HTML page, so every caller in
   // lib/api.ts reports only its own generic "Failed to ..." and the real cause
   // stays buried in the server terminal. Name the address we actually tried.
-  // BACKEND_BASE_URL carries no credentials (the shared secret is a separate
-  // header), so echoing it to the caller costs nothing and is the whole point.
+  // Only the origin goes back to the caller: nothing stops BACKEND_BASE_URL
+  // from carrying userinfo (`https://svc:secret@api.internal:8000` is a common
+  // shortcut for a backend behind basic auth), and `new URL(...).origin` drops
+  // it while keeping the host and port — which is the part worth reporting.
+  // The scheme/host/port itself is deliberately disclosed to the caller: this
+  // is a single-user self-hosted app, and naming the address we tried is the
+  // whole point of the message.
   let upstream: Response;
   try {
     upstream = await fetch(url, init);
@@ -108,13 +122,25 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
     ]
       .filter(Boolean)
       .join(": ");
+    const safeCause = redactUserinfo(cause);
+    // `path` is URL-decoded by Next, so a `%0A` in the request path would
+    // otherwise write forged `[backend-proxy]` lines into the log stream an
+    // operator is reading to debug this very outage.
     console.error(
-      `[backend-proxy] ${req.method} /${path} -> ${BACKEND_BASE}: ${cause}`,
+      `[backend-proxy] ${req.method} ${JSON.stringify(path)} -> ` +
+        `${redactUserinfo(BACKEND_BASE)}: ${safeCause}`,
     );
+    let target = redactUserinfo(BACKEND_BASE);
+    try {
+      target = new URL(BACKEND_BASE).origin;
+    } catch {
+      // Unparseable BACKEND_BASE_URL — the connection failure the operator
+      // needs to see, so report the raw value rather than nothing.
+    }
     return new Response(
       JSON.stringify({
         detail:
-          `Cannot reach the API at ${BACKEND_BASE} (${cause}). Start the ` +
+          `Cannot reach the API at ${target} (${safeCause}). Start the ` +
           `backend, or set BACKEND_BASE_URL if it listens on another port.`,
       }),
       { status: 502, headers: { "content-type": "application/json" } },
