@@ -24,6 +24,15 @@ RUN uvx --from git+https://github.com/SenteLabsAI/extensible-mcp extensible-mcp 
 COPY packages/core/pyproject.toml packages/core/uv.lock* ./
 RUN uv pip install --system -r pyproject.toml 2>/dev/null || uv pip install --system .
 
+# The `agent-sdk` extra, installed explicitly (the line above installs only the
+# base dependency set from pyproject). Ships the Claude Code CLI, which lets
+# AGENT_SDK_ENABLED=true serve model calls from a Claude subscription instead
+# of a metered ANTHROPIC_API_KEY. Authenticate headlessly by passing
+# CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) — no interactive login and
+# no credential file inside the image. Adds ~220 MB to an image that already
+# bakes PyTorch and two embedding models.
+RUN uv pip install --system "claude-agent-sdk>=0.2.0"
+
 # Bake the embedding model the MCP gateway loads at startup
 # (sentence-transformers/all-MiniLM-L6-v2). Without this the ~90 MB model is
 # fetched from Hugging Face on every cold start, which dominates boot time —
