@@ -127,6 +127,22 @@ Open http://localhost:3000 to start chatting with your executive. The API runs o
 > `There was a problem with the server configuration` — NextAuth has neither a
 > secret nor Google credentials.
 
+> **Signing in for the first time.** The UI gates every page behind Google
+> sign-in, so a fresh checkout needs three values in the repo-root `.env`:
+>
+> ```bash
+> AUTH_SECRET=$(openssl rand -base64 32)   # NextAuth refuses to start without it
+> AUTH_GOOGLE_ID=...                       # Google Cloud -> APIs & Services ->
+> AUTH_GOOGLE_SECRET=...                   #   Credentials -> OAuth client ID (Web)
+> ALLOWED_EMAILS=you@example.com           # replace the alice/bob placeholders
+> ```
+>
+> In the Google OAuth client, add the exact callback as an **Authorized redirect
+> URI** — `http://localhost:3000/api/auth/callback/google` (path and port must
+> match, and Google accepts `http` only for `localhost`). `ALLOWED_EMAILS` is
+> the bootstrap allowlist: it applies only until the People table has an email
+> row, after which the roster is authoritative.
+
 > **Ports already in use?** Override either:
 >
 > ```bash
