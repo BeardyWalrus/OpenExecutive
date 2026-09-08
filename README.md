@@ -462,6 +462,71 @@ this backend is not a byte-identical match for the Anthropic API:
 silently redirect an existing OpenRouter deployment. Best suited to local
 development — a deployed, shared instance should keep using an API key.
 
+## Running from prebuilt images (GHCR)
+
+`.github/workflows/publish-images.yml` builds both images on every push to
+`main` and publishes them to GitHub Container Registry:
+
+```
+ghcr.io/beardywalrus/openexecutive-api:latest
+ghcr.io/beardywalrus/openexecutive-ui:latest
+```
+
+Each build also publishes `sha-<commit>` (and `v*` on a tag), so a host can pin
+an exact build with `IMAGE_TAG=sha-<commit>`.
+
+On the Docker host — no clone, no build, just the compose file and a `.env`:
+
+```bash
+docker compose --env-file .env -f docker/docker-compose.ghcr.yml up -d
+```
+
+This is the recommended way to run on a host where `next dev`/`next build` die
+with `Bus error`: the UI image is built on `node:22-alpine` (musl), so it never
+loads the glibc-linked `@next/swc` binary.
+
+> The API is deliberately **not** published to the host — the UI reaches it over
+> the compose network, and the API has no authentication unless
+> `BACKEND_SHARED_SECRET` is set. Set that secret on **both** services if you
+> expose it.
+
+### Google sign-in on a Docker host
+
+Every page is gated by Google OAuth, and Google's redirect-URI rules decide what
+is possible here: redirect URIs must use **HTTPS**, and the host **cannot be a
+raw IP address** — with a single exception for `localhost` (and `127.0.0.1`),
+which may use plain HTTP.
+
+So `http://192.168.1.50:3000` can never be registered, no matter how the
+container is configured. Two options that do work:
+
+**1. Reach it over a localhost tunnel** (quickest; nothing to buy or configure)
+
+```bash
+ssh -N -L 3000:localhost:3000 user@docker-host   # then browse localhost:3000
+```
+
+- Google redirect URI: `http://localhost:3000/api/auth/callback/google`
+- Leave `AUTH_URL` **unset** — NextAuth then infers the origin from the request.
+
+**2. Give it a real hostname with HTTPS** (proper multi-user setup)
+
+Put a reverse proxy in front (Caddy, Traefik, Tailscale Funnel, cloudflared) so
+the UI is served at e.g. `https://openexec.example.com`, then:
+
+- Google redirect URI: `https://openexec.example.com/api/auth/callback/google`
+- `AUTH_URL=https://openexec.example.com`
+- `AUTH_TRUST_HOST=true` (already the default here)
+
+Either way the `.env` also needs:
+
+```bash
+AUTH_SECRET=$(openssl rand -base64 32)   # without it: "problem with the server configuration"
+AUTH_GOOGLE_ID=...apps.googleusercontent.com
+AUTH_GOOGLE_SECRET=GOCSPX-...
+ALLOWED_EMAILS=you@example.com           # a valid login not listed here is still rejected
+```
+
 ## Running on Local Models
 
 Open Executive can run against any **OpenAI-compatible** local server — Ollama,
