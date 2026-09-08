@@ -87,7 +87,39 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
     duplex: "half",
   };
 
-  const upstream = await fetch(url, init);
+  // The backend not being reachable is the single most common local-setup
+  // failure (not started yet, or listening on a different port than
+  // BACKEND_BASE_URL says). Without this catch the thrown fetch error becomes
+  // an opaque Next.js 500 whose body is an HTML page, so every caller in
+  // lib/api.ts reports only its own generic "Failed to ..." and the real cause
+  // stays buried in the server terminal. Name the address we actually tried.
+  // BACKEND_BASE_URL carries no credentials (the shared secret is a separate
+  // header), so echoing it to the caller costs nothing and is the whole point.
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, init);
+  } catch (err) {
+    // Node's fetch rejects with a bare "fetch failed" TypeError and buries the
+    // useful part (ECONNREFUSED, EAI_AGAIN, a TLS error) in `cause`.
+    const inner = err instanceof Error ? err.cause : undefined;
+    const cause = [
+      err instanceof Error ? err.message : String(err),
+      inner instanceof Error ? inner.message : undefined,
+    ]
+      .filter(Boolean)
+      .join(": ");
+    console.error(
+      `[backend-proxy] ${req.method} /${path} -> ${BACKEND_BASE}: ${cause}`,
+    );
+    return new Response(
+      JSON.stringify({
+        detail:
+          `Cannot reach the API at ${BACKEND_BASE} (${cause}). Start the ` +
+          `backend, or set BACKEND_BASE_URL if it listens on another port.`,
+      }),
+      { status: 502, headers: { "content-type": "application/json" } },
+    );
+  }
 
   // Pass response through as a stream. Do not buffer.
   const respHeaders = new Headers(upstream.headers);
