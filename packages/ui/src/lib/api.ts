@@ -1,5 +1,85 @@
 const API_BASE = "/api/backend";
 
+/**
+ * A non-OK HTTP response, carrying the parts needed to say *why* it failed.
+ *
+ * Nearly every call below used to throw `new Error("Failed to X")`, which
+ * discarded the status and the server's own explanation — so an API that
+ * wasn't running, a 401 from the proxy and a genuine 500 all surfaced to the
+ * user as the same sentence. `status` is exposed so callers can branch on it
+ * instead of matching on message text.
+ */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly detail: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+// Detail text goes straight into user-visible messages, so cap it: long
+// enough for a FastAPI `detail` or a proxy diagnostic, short enough that a
+// stack trace or an HTML page can't fill the screen. Exported so the contract
+// test asserts against this value rather than a copy of it.
+export const MAX_DETAIL_CHARS = 300;
+
+/** Pull the most useful explanation out of an error response body. */
+function detailFrom(body: string, statusText: string): string {
+  const text = body.trim();
+  // An HTML error page (Next's dev overlay, a gateway) has nothing readable in
+  // its first few hundred characters, so statusText is strictly better.
+  if (!text || text.startsWith("<")) return statusText;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return text.slice(0, MAX_DETAIL_CHARS);
+  }
+  const detail = (parsed as { detail?: unknown } | null)?.detail;
+  if (typeof detail === "string" && detail) return detail.slice(0, MAX_DETAIL_CHARS);
+  // FastAPI request-validation errors arrive as a list of objects.
+  if (Array.isArray(detail) && detail.length > 0) {
+    return detail
+      .map((d) => (typeof d === "string" ? d : JSON.stringify(d)))
+      .join("; ")
+      .slice(0, MAX_DETAIL_CHARS);
+  }
+  // JSON we don't recognise: everything that answers this client — FastAPI and
+  // the backend proxy alike — uses `detail`, so an envelope without one is
+  // some other layer's internals. Echoing it raw would put whatever it happens
+  // to contain on screen; statusText says as much and reveals nothing.
+  return statusText;
+}
+
+/**
+ * Build the error to throw for a non-OK response. `fallback` names the
+ * operation ("Failed to load people"); the status and the server's detail are
+ * appended to it.
+ *
+ * The body is read once, as text: a failed `res.json()` leaves the body
+ * disturbed, so it cannot then be retried as text. Only call this on a
+ * response whose body you are otherwise done with.
+ */
+async function apiError(res: Response, fallback: string): Promise<ApiError> {
+  let raw = "";
+  try {
+    raw = await res.text();
+  } catch {
+    // Body unreadable — already consumed, or the connection dropped.
+  }
+  const detail = detailFrom(raw, res.statusText);
+  return new ApiError(
+    res.status,
+    detail,
+    detail
+      ? `${fallback} (HTTP ${res.status}): ${detail}`
+      : `${fallback} (HTTP ${res.status})`,
+  );
+}
+
 export type CommitteePhase = "drafting" | "reviewing" | "finalizing";
 
 // Inline action chip surfaced when the Executive fires a side-effecting
@@ -192,7 +272,7 @@ export interface OnboardStatus {
 
 export async function startOnboarding(): Promise<OnboardStatus> {
   const res = await fetch(`${API_BASE}/onboard/start`);
-  if (!res.ok) throw new Error("Failed to start onboarding");
+  if (!res.ok) throw await apiError(res, "Failed to start onboarding");
   return res.json();
 }
 
@@ -205,7 +285,7 @@ export async function submitOnboardAnswer(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: sessionId, answer }),
   });
-  if (!res.ok) throw new Error("Failed to submit answer");
+  if (!res.ok) throw await apiError(res, "Failed to submit answer");
   return res.json();
 }
 
@@ -228,7 +308,7 @@ export interface CompanyProfile {
 
 export async function getCompanyProfile(): Promise<CompanyProfile> {
   const res = await fetch(`${API_BASE}/company-profile`);
-  if (!res.ok) throw new Error(`${res.status}`);
+  if (!res.ok) throw await apiError(res, "Failed to load company profile");
   return res.json();
 }
 
@@ -238,7 +318,7 @@ export async function updateCompanyProfile(patch: Partial<CompanyProfile>): Prom
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error("Failed to update profile");
+  if (!res.ok) throw await apiError(res, "Failed to update profile");
   return res.json();
 }
 
@@ -254,7 +334,7 @@ export async function uploadDocument(
     method: "POST",
     body: formData,
   });
-  if (!res.ok) throw new Error("Failed to upload document");
+  if (!res.ok) throw await apiError(res, "Failed to upload document");
   return res.json();
 }
 
@@ -266,7 +346,7 @@ export interface CompanyDoc {
 
 export async function listDocuments(): Promise<CompanyDoc[]> {
   const res = await fetch(`${API_BASE}/documents`);
-  if (!res.ok) throw new Error("Failed to list documents");
+  if (!res.ok) throw await apiError(res, "Failed to list documents");
   const data = await res.json();
   return data.documents;
 }
@@ -275,7 +355,7 @@ export async function deleteDocument(filename: string): Promise<void> {
   const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(filename)}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error("Failed to delete document");
+  if (!res.ok) throw await apiError(res, "Failed to delete document");
 }
 
 export interface CompanyDocContent {
@@ -285,7 +365,7 @@ export interface CompanyDocContent {
 
 export async function getDocument(filename: string): Promise<CompanyDocContent> {
   const res = await fetch(`${API_BASE}/documents/${encodeURIComponent(filename)}`);
-  if (!res.ok) throw new Error("Failed to fetch document content");
+  if (!res.ok) throw await apiError(res, "Failed to fetch document content");
   return res.json();
 }
 
@@ -303,7 +383,7 @@ export interface BuiltinFileContent {
 
 export async function listBuiltinFiles(): Promise<BuiltinFileMeta[]> {
   const res = await fetch(`${API_BASE}/knowledge/builtin`);
-  if (!res.ok) throw new Error("Failed to fetch built-in files");
+  if (!res.ok) throw await apiError(res, "Failed to fetch built-in files");
   const data = await res.json();
   return data.files;
 }
@@ -313,7 +393,7 @@ export async function getBuiltinFile(
   filename: string
 ): Promise<BuiltinFileContent> {
   const res = await fetch(`${API_BASE}/knowledge/builtin/${domain}/${filename}`);
-  if (!res.ok) throw new Error("Failed to fetch file content");
+  if (!res.ok) throw await apiError(res, "Failed to fetch file content");
   return res.json();
 }
 
@@ -344,7 +424,7 @@ export async function updateBuiltinFile(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ domain, filename, content }),
   });
-  if (!res.ok) throw new Error("Failed to save file");
+  if (!res.ok) throw await apiError(res, "Failed to save file");
   return res.json();
 }
 
@@ -352,7 +432,7 @@ export async function deleteBuiltinFile(domain: string, filename: string): Promi
   const res = await fetch(`${API_BASE}/knowledge/builtin/${domain}/${filename}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error("Failed to delete file");
+  if (!res.ok) throw await apiError(res, "Failed to delete file");
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +441,7 @@ export async function deleteBuiltinFile(domain: string, filename: string): Promi
 
 export async function listFailureFiles(): Promise<BuiltinFileMeta[]> {
   const res = await fetch(`${API_BASE}/knowledge/failures`);
-  if (!res.ok) throw new Error("Failed to fetch failure files");
+  if (!res.ok) throw await apiError(res, "Failed to fetch failure files");
   const data = await res.json();
   return data.files;
 }
@@ -371,7 +451,7 @@ export async function getFailureFile(
   filename: string
 ): Promise<BuiltinFileContent> {
   const res = await fetch(`${API_BASE}/knowledge/failures/${domain}/${filename}`);
-  if (!res.ok) throw new Error("Failed to fetch failure content");
+  if (!res.ok) throw await apiError(res, "Failed to fetch failure content");
   return res.json();
 }
 
@@ -402,7 +482,7 @@ export async function updateFailureFile(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ domain, filename, content }),
   });
-  if (!res.ok) throw new Error("Failed to save failure file");
+  if (!res.ok) throw await apiError(res, "Failed to save failure file");
   return res.json();
 }
 
@@ -410,7 +490,7 @@ export async function deleteFailureFile(domain: string, filename: string): Promi
   const res = await fetch(`${API_BASE}/knowledge/failures/${domain}/${filename}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error("Failed to delete failure file");
+  if (!res.ok) throw await apiError(res, "Failed to delete failure file");
 }
 
 // ---------------------------------------------------------------------------
@@ -507,7 +587,7 @@ export interface ExternalPeekResponse {
 
 export async function listExternalSources(): Promise<ExternalSourcesResponse> {
   const res = await fetch(`${API_BASE}/knowledge/external`);
-  if (!res.ok) throw new Error("Failed to list reference sources");
+  if (!res.ok) throw await apiError(res, "Failed to list reference sources");
   return res.json();
 }
 
@@ -518,7 +598,7 @@ export async function peekExternalSource(
   const res = await fetch(
     `${API_BASE}/knowledge/external/${encodeURIComponent(sourceId)}/peek?limit=${limit}`
   );
-  if (!res.ok) throw new Error("Failed to peek source");
+  if (!res.ok) throw await apiError(res, "Failed to peek source");
   return res.json();
 }
 
@@ -546,14 +626,14 @@ export interface SkillSearchHit {
 
 export async function listSkills(): Promise<SkillMeta[]> {
   const res = await fetch(`${API_BASE}/skills`);
-  if (!res.ok) throw new Error("Failed to list skills");
+  if (!res.ok) throw await apiError(res, "Failed to list skills");
   const data = await res.json();
   return data.skills;
 }
 
 export async function getSkill(name: string): Promise<SkillDetail> {
   const res = await fetch(`${API_BASE}/skills/${encodeURIComponent(name)}`);
-  if (!res.ok) throw new Error("Failed to load skill");
+  if (!res.ok) throw await apiError(res, "Failed to load skill");
   return res.json();
 }
 
@@ -563,7 +643,7 @@ export async function searchSkills(
 ): Promise<SkillSearchHit[]> {
   const params = new URLSearchParams({ q, n: String(n) });
   const res = await fetch(`${API_BASE}/skills/search?${params.toString()}`);
-  if (!res.ok) throw new Error("Failed to search skills");
+  if (!res.ok) throw await apiError(res, "Failed to search skills");
   const data = await res.json();
   return data.results;
 }
@@ -588,13 +668,13 @@ export interface SessionSummary {
 
 export async function listSessions(): Promise<SessionSummary[]> {
   const res = await fetch(`${API_BASE}/sessions`);
-  if (!res.ok) throw new Error("Failed to list sessions");
+  if (!res.ok) throw await apiError(res, "Failed to list sessions");
   return res.json();
 }
 
 export async function getSessionMessages(sessionId: string): Promise<ChatMessage[]> {
   const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/messages`);
-  if (!res.ok) throw new Error("Failed to load session messages");
+  if (!res.ok) throw await apiError(res, "Failed to load session messages");
   return res.json();
 }
 
@@ -602,7 +682,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error("Failed to delete session");
+  if (!res.ok) throw await apiError(res, "Failed to delete session");
 }
 
 export interface SuggestedPromptsResponse {
@@ -615,7 +695,7 @@ export async function getSuggestedPrompts(
   signal?: AbortSignal,
 ): Promise<SuggestedPromptsResponse> {
   const res = await fetch(`${API_BASE}/chat/suggested-prompts`, { signal });
-  if (!res.ok) throw new Error("Failed to load suggested prompts");
+  if (!res.ok) throw await apiError(res, "Failed to load suggested prompts");
   return res.json();
 }
 
@@ -658,7 +738,7 @@ export interface Advice {
 
 export async function listDecisions(): Promise<Decision[]> {
   const res = await fetch(`${API_BASE}/memories/decisions`);
-  if (!res.ok) throw new Error("Failed to list decisions");
+  if (!res.ok) throw await apiError(res, "Failed to list decisions");
   return res.json();
 }
 
@@ -668,18 +748,18 @@ export async function updateDecision(id: number, patch: Partial<Omit<Decision, "
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error("Failed to update decision");
+  if (!res.ok) throw await apiError(res, "Failed to update decision");
   return res.json();
 }
 
 export async function deleteDecision(id: number): Promise<void> {
   const res = await fetch(`${API_BASE}/memories/decisions/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error("Failed to delete decision");
+  if (!res.ok) throw await apiError(res, "Failed to delete decision");
 }
 
 export async function listInitiatives(): Promise<Initiative[]> {
   const res = await fetch(`${API_BASE}/memories/initiatives`);
-  if (!res.ok) throw new Error("Failed to list initiatives");
+  if (!res.ok) throw await apiError(res, "Failed to list initiatives");
   return res.json();
 }
 
@@ -689,18 +769,18 @@ export async function updateInitiative(id: number, patch: Partial<Omit<Initiativ
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error("Failed to update initiative");
+  if (!res.ok) throw await apiError(res, "Failed to update initiative");
   return res.json();
 }
 
 export async function deleteInitiative(id: number): Promise<void> {
   const res = await fetch(`${API_BASE}/memories/initiatives/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error("Failed to delete initiative");
+  if (!res.ok) throw await apiError(res, "Failed to delete initiative");
 }
 
 export async function listAdvice(): Promise<Advice[]> {
   const res = await fetch(`${API_BASE}/memories/advice`);
-  if (!res.ok) throw new Error("Failed to list advice");
+  if (!res.ok) throw await apiError(res, "Failed to list advice");
   return res.json();
 }
 
@@ -710,13 +790,13 @@ export async function updateAdvice(id: number, patch: Partial<Omit<Advice, "id" 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error("Failed to update advice");
+  if (!res.ok) throw await apiError(res, "Failed to update advice");
   return res.json();
 }
 
 export async function deleteAdvice(id: number): Promise<void> {
   const res = await fetch(`${API_BASE}/memories/advice/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error("Failed to delete advice");
+  if (!res.ok) throw await apiError(res, "Failed to delete advice");
 }
 
 export interface ScheduledAction {
@@ -749,7 +829,7 @@ export async function listScheduledActions(
 ): Promise<ScheduledAction[]> {
   const params = new URLSearchParams({ status, limit: String(limit), order });
   const res = await fetch(`${API_BASE}/scheduled?${params.toString()}`, { signal });
-  if (!res.ok) throw new Error("Failed to list scheduled actions");
+  if (!res.ok) throw await apiError(res, "Failed to list scheduled actions");
   return res.json();
 }
 
@@ -763,7 +843,7 @@ export async function cancelScheduledAction(id: number): Promise<ScheduledAction
       "Cancel is gated by SCHEDULED_ADMIN_TOKEN. The UI doesn't forward this header yet — cancel from a loopback client or unset the token.",
     );
   }
-  if (!res.ok) throw new Error("Failed to cancel scheduled action");
+  if (!res.ok) throw await apiError(res, "Failed to cancel scheduled action");
   return res.json();
 }
 
@@ -883,14 +963,14 @@ export const DYNAMIC_SPECIALISTS = [
 
 export async function listCustomWorkflows(): Promise<DynamicWorkflowDef[]> {
   const res = await fetch(`${API_BASE}/workflows/custom`);
-  if (!res.ok) throw new Error("Failed to list custom workflows");
+  if (!res.ok) throw await apiError(res, "Failed to list custom workflows");
   const data = await res.json();
   return data.definitions;
 }
 
 export async function getCustomWorkflow(name: string): Promise<DynamicWorkflowDef> {
   const res = await fetch(`${API_BASE}/workflows/custom/${encodeURIComponent(name)}`);
-  if (!res.ok) throw new Error("Failed to load custom workflow");
+  if (!res.ok) throw await apiError(res, "Failed to load custom workflow");
   return res.json();
 }
 
@@ -933,7 +1013,7 @@ export async function deleteCustomWorkflow(name: string): Promise<void> {
   const res = await fetch(`${API_BASE}/workflows/custom/${encodeURIComponent(name)}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error("Failed to delete custom workflow");
+  if (!res.ok) throw await apiError(res, "Failed to delete custom workflow");
 }
 
 export interface WorkflowSample {
@@ -972,20 +1052,20 @@ export interface WorkflowEvent {
 
 export async function listWorkflows(): Promise<WorkflowMeta[]> {
   const res = await fetch(`${API_BASE}/workflows`);
-  if (!res.ok) throw new Error("Failed to list workflows");
+  if (!res.ok) throw await apiError(res, "Failed to list workflows");
   const data = await res.json();
   return data.workflows;
 }
 
 export async function getWorkflow(name: string): Promise<WorkflowMeta> {
   const res = await fetch(`${API_BASE}/workflows/${encodeURIComponent(name)}`);
-  if (!res.ok) throw new Error("Failed to load workflow");
+  if (!res.ok) throw await apiError(res, "Failed to load workflow");
   return res.json();
 }
 
 export async function getWorkflowSample(name: string): Promise<WorkflowSample> {
   const res = await fetch(`${API_BASE}/workflows/${encodeURIComponent(name)}/sample`);
-  if (!res.ok) throw new Error("Failed to load workflow sample");
+  if (!res.ok) throw await apiError(res, "Failed to load workflow sample");
   return res.json();
 }
 
@@ -995,14 +1075,14 @@ export async function listWorkflowRuns(
   const params = new URLSearchParams();
   if (workflowName) params.set("workflow", workflowName);
   const res = await fetch(`${API_BASE}/workflows/runs?${params.toString()}`);
-  if (!res.ok) throw new Error("Failed to list workflow runs");
+  if (!res.ok) throw await apiError(res, "Failed to list workflow runs");
   const data = await res.json();
   return data.runs;
 }
 
 export async function getWorkflowRun(runId: string): Promise<WorkflowRunDetail> {
   const res = await fetch(`${API_BASE}/workflows/runs/${encodeURIComponent(runId)}`);
-  if (!res.ok) throw new Error("Failed to load workflow run");
+  if (!res.ok) throw await apiError(res, "Failed to load workflow run");
   return res.json();
 }
 
@@ -1010,7 +1090,7 @@ export async function deleteWorkflowRun(runId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/workflows/runs/${encodeURIComponent(runId)}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error("Failed to delete workflow run");
+  if (!res.ok) throw await apiError(res, "Failed to delete workflow run");
 }
 
 // ---------------------------------------------------------------------------
@@ -1042,14 +1122,14 @@ export async function listArtifacts(
 ): Promise<ArtifactSummary[]> {
   const qs = opts?.archived ? "?archived=true" : "";
   const res = await fetch(`${API_BASE}/artifacts${qs}`);
-  if (!res.ok) throw new Error("Failed to list artifacts");
+  if (!res.ok) throw await apiError(res, "Failed to list artifacts");
   const data = await res.json();
   return data.artifacts;
 }
 
 export async function getArtifact(id: string): Promise<ArtifactDetail> {
   const res = await fetch(`${API_BASE}/artifacts/${encodeURIComponent(id)}`);
-  if (!res.ok) throw new Error("Failed to load artifact");
+  if (!res.ok) throw await apiError(res, "Failed to load artifact");
   return res.json();
 }
 
@@ -1058,7 +1138,7 @@ export async function archiveArtifact(id: string): Promise<void> {
     `${API_BASE}/artifacts/${encodeURIComponent(id)}/archive`,
     { method: "POST" }
   );
-  if (!res.ok) throw new Error("Failed to archive artifact");
+  if (!res.ok) throw await apiError(res, "Failed to archive artifact");
 }
 
 export async function restoreArtifact(id: string): Promise<void> {
@@ -1066,14 +1146,14 @@ export async function restoreArtifact(id: string): Promise<void> {
     `${API_BASE}/artifacts/${encodeURIComponent(id)}/restore`,
     { method: "POST" }
   );
-  if (!res.ok) throw new Error("Failed to restore artifact");
+  if (!res.ok) throw await apiError(res, "Failed to restore artifact");
 }
 
 export async function deleteArtifact(id: string): Promise<void> {
   const res = await fetch(`${API_BASE}/artifacts/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error("Failed to delete artifact");
+  if (!res.ok) throw await apiError(res, "Failed to delete artifact");
 }
 
 // ---------------------------------------------------------------------------
@@ -1140,19 +1220,19 @@ export async function listReviewItems(params?: {
   if (params?.offset != null) p.set("offset", String(params.offset));
   const qs = p.toString();
   const res = await fetch(`${API_BASE}/review/items${qs ? `?${qs}` : ""}`);
-  if (!res.ok) throw new Error("Failed to list review items");
+  if (!res.ok) throw await apiError(res, "Failed to list review items");
   return res.json();
 }
 
 export async function getReviewItem(itemId: string): Promise<ReviewItemDetail> {
   const res = await fetch(`${API_BASE}/review/items/${encodeURIComponent(itemId)}`);
-  if (!res.ok) throw new Error("Failed to get review item");
+  if (!res.ok) throw await apiError(res, "Failed to get review item");
   return res.json();
 }
 
 export async function getReviewStats(): Promise<ReviewStats> {
   const res = await fetch(`${API_BASE}/review/stats`);
-  if (!res.ok) throw new Error("Failed to get review stats");
+  if (!res.ok) throw await apiError(res, "Failed to get review stats");
   return res.json();
 }
 
@@ -1162,7 +1242,7 @@ export async function patchReviewItem(itemId: string, patch: ReviewItemPatch): P
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error("Failed to update review item");
+  if (!res.ok) throw await apiError(res, "Failed to update review item");
   return res.json();
 }
 
@@ -1172,19 +1252,19 @@ export async function bulkApproveReviewItems(domain?: string): Promise<{ approve
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ domain }),
   });
-  if (!res.ok) throw new Error("Failed to bulk approve");
+  if (!res.ok) throw await apiError(res, "Failed to bulk approve");
   return res.json();
 }
 
 export async function listAllAnnotations(activeOnly = true): Promise<ReviewAnnotation[]> {
   const res = await fetch(`${API_BASE}/review/annotations?active_only=${activeOnly}`);
-  if (!res.ok) throw new Error("Failed to list annotations");
+  if (!res.ok) throw await apiError(res, "Failed to list annotations");
   return res.json();
 }
 
 export async function listItemAnnotations(itemId: string): Promise<ReviewAnnotation[]> {
   const res = await fetch(`${API_BASE}/review/items/${encodeURIComponent(itemId)}/annotations`);
-  if (!res.ok) throw new Error("Failed to list annotations");
+  if (!res.ok) throw await apiError(res, "Failed to list annotations");
   return res.json();
 }
 
@@ -1194,7 +1274,7 @@ export async function addAnnotation(itemId: string, correction: string): Promise
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ correction }),
   });
-  if (!res.ok) throw new Error("Failed to add annotation");
+  if (!res.ok) throw await apiError(res, "Failed to add annotation");
   return res.json();
 }
 
@@ -1207,14 +1287,14 @@ export async function patchAnnotation(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error("Failed to update annotation");
+  if (!res.ok) throw await apiError(res, "Failed to update annotation");
 }
 
 export async function deleteAnnotation(annotationId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/review/annotations/${encodeURIComponent(annotationId)}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error("Failed to delete annotation");
+  if (!res.ok) throw await apiError(res, "Failed to delete annotation");
 }
 
 export async function* runWorkflow(
@@ -1341,13 +1421,13 @@ export interface Persona {
 
 export async function listPersonas(): Promise<PersonaMeta[]> {
   const res = await fetch(`${API_BASE}/personas`);
-  if (!res.ok) throw new Error("Failed to list personas");
+  if (!res.ok) throw await apiError(res, "Failed to list personas");
   return res.json();
 }
 
 export async function getPersona(slug: string): Promise<Persona> {
   const res = await fetch(`${API_BASE}/personas/${encodeURIComponent(slug)}`);
-  if (!res.ok) throw new Error("Failed to load persona");
+  if (!res.ok) throw await apiError(res, "Failed to load persona");
   return res.json();
 }
 
@@ -1400,13 +1480,13 @@ export async function deletePersona(slug: string): Promise<void> {
 
 export async function listAgents(): Promise<AgentMeta[]> {
   const res = await fetch(`${API_BASE}/agents`);
-  if (!res.ok) throw new Error("Failed to list agents");
+  if (!res.ok) throw await apiError(res, "Failed to list agents");
   return res.json();
 }
 
 export async function getAgentDetail(agentId: string): Promise<AgentDetail> {
   const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}`);
-  if (!res.ok) throw new Error("Failed to load agent detail");
+  if (!res.ok) throw await apiError(res, "Failed to load agent detail");
   return res.json();
 }
 
@@ -1427,12 +1507,12 @@ export async function resetAgent(agentId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/override`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error("Failed to reset agent");
+  if (!res.ok) throw await apiError(res, "Failed to reset agent");
 }
 
 export async function listAgentHistory(agentId: string): Promise<AgentHistoryEntry[]> {
   const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/history`);
-  if (!res.ok) throw new Error("Failed to list history");
+  if (!res.ok) throw await apiError(res, "Failed to list history");
   return res.json();
 }
 
@@ -1444,7 +1524,7 @@ export async function rollbackAgent(
     `${API_BASE}/agents/${encodeURIComponent(agentId)}/rollback/${historyId}`,
     { method: "POST" }
   );
-  if (!res.ok) throw new Error("Failed to roll back");
+  if (!res.ok) throw await apiError(res, "Failed to roll back");
   return res.json();
 }
 
@@ -1467,7 +1547,7 @@ export async function testAgent(
 export async function listAgentModels(agentId?: string): Promise<string[]> {
   const qs = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
   const res = await fetch(`${API_BASE}/agents/models${qs}`);
-  if (!res.ok) throw new Error("Failed to list models");
+  if (!res.ok) throw await apiError(res, "Failed to list models");
   return res.json();
 }
 
@@ -1511,7 +1591,7 @@ export async function listAuditLogs(params: AuditQuery = {}): Promise<AuditListR
     if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
   }
   const res = await fetch(`${API_BASE}/audit/logs?${qs.toString()}`);
-  if (!res.ok) throw new Error("Failed to list audit logs");
+  if (!res.ok) throw await apiError(res, "Failed to list audit logs");
   return res.json();
 }
 
@@ -1523,7 +1603,7 @@ export interface AuditEventDetail extends AuditEvent {
 
 export async function getAuditLog(id: number): Promise<AuditEventDetail> {
   const res = await fetch(`${API_BASE}/audit/logs/${id}`);
-  if (!res.ok) throw new Error("Failed to load audit event");
+  if (!res.ok) throw await apiError(res, "Failed to load audit event");
   return res.json();
 }
 
@@ -1640,7 +1720,7 @@ export async function getAuditUsage(
     if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
   }
   const res = await fetch(`${API_BASE}/audit/usage?${qs.toString()}`);
-  if (!res.ok) throw new Error("Failed to load token usage");
+  if (!res.ok) throw await apiError(res, "Failed to load token usage");
   return res.json();
 }
 
@@ -1684,7 +1764,7 @@ export interface FixtureLoadResult {
 
 export async function listFixtures(): Promise<FixtureSummary[]> {
   const res = await fetch(`${API_BASE}/fixtures`);
-  if (!res.ok) throw new Error("Failed to list fixtures");
+  if (!res.ok) throw await apiError(res, "Failed to list fixtures");
   const data = await res.json();
   return data.fixtures as FixtureSummary[];
 }
@@ -1724,7 +1804,7 @@ export interface UnloadResult {
 
 export async function getFixtureStatus(): Promise<FixtureStatus> {
   const res = await fetch(`${API_BASE}/fixtures/status`);
-  if (!res.ok) throw new Error("Failed to fetch fixture status");
+  if (!res.ok) throw await apiError(res, "Failed to fetch fixture status");
   return res.json() as Promise<FixtureStatus>;
 }
 
@@ -1900,13 +1980,13 @@ export interface DepartmentState {
 
 export async function listDepartments(): Promise<DepartmentState[]> {
   const res = await fetch(`${API_BASE}/departments`);
-  if (!res.ok) throw new Error(`Failed to load departments: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load departments");
   return res.json();
 }
 
 export async function getDepartment(slug: string): Promise<DepartmentState> {
   const res = await fetch(`${API_BASE}/departments/${slug}`);
-  if (!res.ok) throw new Error(`Failed to load department: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load department");
   return res.json();
 }
 
@@ -1929,7 +2009,7 @@ export async function updateDepartment(slug: string, patch: DepartmentPatch): Pr
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`Failed to update department: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to update department");
   return res.json();
 }
 
@@ -1944,7 +2024,7 @@ export async function createDepartment(body: DepartmentCreate): Promise<Departme
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Failed to create department: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to create department");
   return res.json();
 }
 
@@ -1952,7 +2032,7 @@ export async function deleteDepartment(slug: string): Promise<void> {
   const res = await fetch(`${API_BASE}/departments/${slug}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error(`Failed to delete department: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to delete department");
 }
 
 export interface GoalCreate {
@@ -1970,7 +2050,7 @@ export async function createGoal(slug: string, body: GoalCreate): Promise<Goal> 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Failed to create Goal: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to create Goal");
   return res.json();
 }
 
@@ -1989,7 +2069,7 @@ export async function updateGoal(slug: string, goalId: number, patch: GoalPatch)
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`Failed to update Goal: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to update Goal");
   return res.json();
 }
 
@@ -1997,7 +2077,7 @@ export async function deleteGoal(slug: string, goalId: number): Promise<void> {
   const res = await fetch(`${API_BASE}/departments/${slug}/goals/${goalId}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error(`Failed to delete Goal: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to delete Goal");
 }
 
 // ---------------------------------------------------------------------------
@@ -2032,13 +2112,13 @@ export interface Person {
 
 export async function listPeople(): Promise<Person[]> {
   const res = await fetch(`${API_BASE}/people`);
-  if (!res.ok) throw new Error(`Failed to load people: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load people");
   return res.json();
 }
 
 export async function getPerson(id: number): Promise<Person> {
   const res = await fetch(`${API_BASE}/people/${id}`);
-  if (!res.ok) throw new Error(`Failed to load person: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load person");
   return res.json();
 }
 
@@ -2064,7 +2144,7 @@ export async function createPerson(body: PersonCreate): Promise<Person> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Failed to create person: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to create person");
   return res.json();
 }
 
@@ -2090,13 +2170,13 @@ export async function updatePerson(id: number, patch: PersonPatch): Promise<Pers
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`Failed to update person: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to update person");
   return res.json();
 }
 
 export async function archivePerson(id: number): Promise<void> {
   const res = await fetch(`${API_BASE}/people/${id}/archive`, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to archive person: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to archive person");
 }
 
 // ---------------------------------------------------------------------------
@@ -2189,13 +2269,13 @@ export async function listEngagements(includeArchived = false): Promise<Engageme
   const res = await fetch(
     `${API_BASE}/engagements?include_archived=${includeArchived}`,
   );
-  if (!res.ok) throw new Error(`Failed to load engagements: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load engagements");
   return res.json();
 }
 
 export async function getEngagement(id: number): Promise<Engagement> {
   const res = await fetch(`${API_BASE}/engagements/${id}`);
-  if (!res.ok) throw new Error(`Failed to load engagement: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load engagement");
   return res.json();
 }
 
@@ -2205,7 +2285,7 @@ export async function createEngagement(body: EngagementCreate): Promise<Engageme
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Failed to create engagement: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to create engagement");
   return res.json();
 }
 
@@ -2215,13 +2295,13 @@ export async function updateEngagement(id: number, patch: EngagementPatch): Prom
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`Failed to update engagement: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to update engagement");
   return res.json();
 }
 
 export async function archiveEngagement(id: number): Promise<void> {
   const res = await fetch(`${API_BASE}/engagements/${id}/archive`, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to archive engagement: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to archive engagement");
 }
 
 // ---- Candidates ----
@@ -2237,13 +2317,13 @@ export async function listCandidates(opts: {
   if (opts.engagementId != null) params.set("engagement_id", String(opts.engagementId));
   if (opts.stage) params.set("stage", opts.stage);
   const res = await fetch(`${API_BASE}/candidates?${params.toString()}`);
-  if (!res.ok) throw new Error(`Failed to load candidates: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load candidates");
   return res.json();
 }
 
 export async function getCandidate(id: number): Promise<Candidate> {
   const res = await fetch(`${API_BASE}/candidates/${id}`);
-  if (!res.ok) throw new Error(`Failed to load candidate: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load candidate");
   return res.json();
 }
 
@@ -2253,7 +2333,7 @@ export async function createCandidate(body: CandidateCreate): Promise<Candidate>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Failed to create candidate: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to create candidate");
   return res.json();
 }
 
@@ -2263,7 +2343,7 @@ export async function updateCandidate(id: number, patch: CandidatePatch): Promis
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`Failed to update candidate: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to update candidate");
   return res.json();
 }
 
@@ -2273,13 +2353,13 @@ export async function setCandidateStage(id: number, stage: CandidateStage): Prom
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ stage }),
   });
-  if (!res.ok) throw new Error(`Failed to update candidate stage: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to update candidate stage");
   return res.json();
 }
 
 export async function archiveCandidate(id: number): Promise<void> {
   const res = await fetch(`${API_BASE}/candidates/${id}/archive`, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to archive candidate: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to archive candidate");
 }
 
 // ---- Talent graph (matching) ----
@@ -2289,7 +2369,7 @@ export async function matchCandidatesForEngagement(
   limit = 10,
 ): Promise<CandidateMatch[]> {
   const res = await fetch(`${API_BASE}/engagements/${engagementId}/matches?limit=${limit}`);
-  if (!res.ok) throw new Error(`Failed to load matches: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load matches");
   return res.json();
 }
 
@@ -2298,13 +2378,13 @@ export async function similarCandidates(
   limit = 5,
 ): Promise<CandidateMatch[]> {
   const res = await fetch(`${API_BASE}/candidates/${candidateId}/similar?limit=${limit}`);
-  if (!res.ok) throw new Error(`Failed to load similar candidates: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load similar candidates");
   return res.json();
 }
 
 export async function reindexTalent(): Promise<{ indexed: number }> {
   const res = await fetch(`${API_BASE}/talent/reindex`, { method: "POST" });
-  if (!res.ok) throw new Error(`Failed to reindex talent: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to reindex talent");
   return res.json();
 }
 
@@ -2358,18 +2438,6 @@ export interface OfferActionResponse {
   warnings: string[];
 }
 
-// Offer-lifecycle conflicts come back as 409s with a meaningful `detail`
-// (e.g. "already has an open offer") — surface that, not just statusText.
-async function offerError(res: Response, fallback: string): Promise<Error> {
-  try {
-    const body = await res.json();
-    if (body?.detail) return new Error(String(body.detail));
-  } catch {
-    // fall through to statusText
-  }
-  return new Error(`${fallback}: ${res.statusText}`);
-}
-
 export async function listOffers(opts: {
   candidateId?: number;
   engagementId?: number;
@@ -2381,7 +2449,7 @@ export async function listOffers(opts: {
   if (opts.status) params.set("status", opts.status);
   const qs = params.toString();
   const res = await fetch(`${API_BASE}/offers${qs ? `?${qs}` : ""}`);
-  if (!res.ok) throw new Error(`Failed to load offers: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load offers");
   return res.json();
 }
 
@@ -2395,7 +2463,7 @@ export async function createOffer(body: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw await offerError(res, "Failed to create offer");
+  if (!res.ok) throw await apiError(res, "Failed to create offer");
   return res.json();
 }
 
@@ -2408,7 +2476,7 @@ export async function extendOffer(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw await offerError(res, "Failed to extend offer");
+  if (!res.ok) throw await apiError(res, "Failed to extend offer");
   return res.json();
 }
 
@@ -2422,7 +2490,7 @@ export async function recordOfferDecision(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ decision, note }),
   });
-  if (!res.ok) throw await offerError(res, "Failed to record offer decision");
+  if (!res.ok) throw await apiError(res, "Failed to record offer decision");
   return res.json();
 }
 
@@ -2585,7 +2653,7 @@ export interface Today {
 
 export async function getToday(): Promise<Today> {
   const res = await fetch(`${API_BASE}/today`);
-  if (!res.ok) throw new Error(`Failed to load today: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load today");
   return res.json();
 }
 
@@ -2601,7 +2669,7 @@ export async function ackAlert(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ status }),
   });
-  if (!res.ok) throw new Error(`Failed to ack alert ${alertId}: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, `Failed to ack alert ${alertId}`);
 }
 
 // Recent self-initiated Executive activity for the briefing rail.
@@ -2624,7 +2692,7 @@ export interface ActivityResponse {
 
 export async function getActivity(limit: number = 20): Promise<ActivityResponse> {
   const res = await fetch(`${API_BASE}/today/activity?limit=${limit}`);
-  if (!res.ok) throw new Error(`Failed to load activity: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load activity");
   return res.json();
 }
 
@@ -2644,7 +2712,7 @@ export async function getActivityDaily(
   signal?: AbortSignal,
 ): Promise<DailyActivityResponse> {
   const res = await fetch(`${API_BASE}/today/activity/daily?days=${days}`, { signal });
-  if (!res.ok) throw new Error(`Failed to load activity heatmap: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load activity heatmap");
   return res.json();
 }
 
@@ -2737,13 +2805,13 @@ export async function listWatchlist(options: {
   if (options.signalType) params.set("signal_type", options.signalType);
   const qs = params.toString();
   const res = await fetch(`${API_BASE}/watchlist${qs ? `?${qs}` : ""}`);
-  if (!res.ok) throw new Error(`Failed to load watchlist: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load watchlist");
   return res.json();
 }
 
 export async function getWatchlistItem(slug: string): Promise<WatchlistItem> {
   const res = await fetch(`${API_BASE}/watchlist/${encodeURIComponent(slug)}`);
-  if (!res.ok) throw new Error(`Failed to load watchlist entry: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load watchlist entry");
   return res.json();
 }
 
@@ -2754,7 +2822,7 @@ export async function getWatchlistSignals(
   const res = await fetch(
     `${API_BASE}/watchlist/${encodeURIComponent(slug)}/signals?limit=${limit}`,
   );
-  if (!res.ok) throw new Error(`Failed to load signals: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load signals");
   return res.json();
 }
 
@@ -2791,7 +2859,7 @@ export async function deleteWatchlistItem(slug: string): Promise<void> {
   const res = await fetch(`${API_BASE}/watchlist/${encodeURIComponent(slug)}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error(`Failed to delete watchlist entry: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to delete watchlist entry");
 }
 
 // ---------------------------------------------------------------------------
@@ -2886,7 +2954,7 @@ export interface ClientsStatus {
 
 export async function listClients(): Promise<ClientsStatus> {
   const res = await fetch(`${API_BASE}/clients`);
-  if (!res.ok) throw new Error("Failed to list clients");
+  if (!res.ok) throw await apiError(res, "Failed to list clients");
   return res.json() as Promise<ClientsStatus>;
 }
 
@@ -3029,13 +3097,13 @@ export async function listOnboardingPlans(
   const res = await fetch(
     `${API_BASE}/onboarding-plans?include_archived=${includeArchived}`,
   );
-  if (!res.ok) throw new Error(`Failed to load onboarding plans: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load onboarding plans");
   return res.json();
 }
 
 export async function getOnboardingPlan(id: number): Promise<OnboardingPlan> {
   const res = await fetch(`${API_BASE}/onboarding-plans/${id}`);
-  if (!res.ok) throw new Error(`Failed to load onboarding plan: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load onboarding plan");
   return res.json();
 }
 
@@ -3047,7 +3115,7 @@ export async function createOnboardingPlan(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Failed to create onboarding plan: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to create onboarding plan");
   return res.json();
 }
 
@@ -3060,7 +3128,7 @@ export async function setOnboardingTaskStatus(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status }),
   });
-  if (!res.ok) throw new Error(`Failed to update task: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to update task");
   return res.json();
 }
 
@@ -3068,7 +3136,7 @@ export async function advanceOnboardingPlan(id: number): Promise<OnboardingPlan>
   const res = await fetch(`${API_BASE}/onboarding-plans/${id}/advance`, {
     method: "POST",
   });
-  if (!res.ok) throw new Error(`Failed to advance plan: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to advance plan");
   return res.json();
 }
 
@@ -3076,7 +3144,7 @@ export async function activateOnboardingPlan(id: number): Promise<OnboardingPlan
   const res = await fetch(`${API_BASE}/onboarding-plans/${id}/activate`, {
     method: "POST",
   });
-  if (!res.ok) throw new Error(`Failed to activate plan: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to activate plan");
   return res.json();
 }
 
@@ -3084,12 +3152,12 @@ export async function archiveOnboardingPlan(id: number): Promise<void> {
   const res = await fetch(`${API_BASE}/onboarding-plans/${id}/archive`, {
     method: "POST",
   });
-  if (!res.ok) throw new Error(`Failed to archive plan: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to archive plan");
 }
 
 export async function listOnboardingTemplates(): Promise<OnboardingTemplate[]> {
   const res = await fetch(`${API_BASE}/onboarding-templates`);
-  if (!res.ok) throw new Error(`Failed to load onboarding templates: ${res.statusText}`);
+  if (!res.ok) throw await apiError(res, "Failed to load onboarding templates");
   return res.json();
 }
 
@@ -3185,7 +3253,7 @@ export async function getClientsCockpit(): Promise<{
   generated_at: string;
 }> {
   const res = await fetch(`${API_BASE}/clients/cockpit`);
-  if (!res.ok) throw new Error("Failed to load practice cockpit");
+  if (!res.ok) throw await apiError(res, "Failed to load practice cockpit");
   return res.json();
 }
 

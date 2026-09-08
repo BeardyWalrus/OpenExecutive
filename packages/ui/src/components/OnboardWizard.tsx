@@ -18,8 +18,15 @@ export default function OnboardWizard({ onComplete }: OnboardWizardProps) {
     try {
       const s = await startOnboarding();
       setStatus(s);
-    } catch {
-      setError("Failed to start onboarding. Is the API server running?");
+    } catch (err) {
+      // Show what actually failed. The old fixed sentence guessed at one cause
+      // ("is the API running?") and hid every other — a 502 from the proxy
+      // naming an unreachable backend, a 401, a validation error.
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to start onboarding. Is the API server running?",
+      );
     } finally {
       setIsLoading(false);
     }
@@ -45,8 +52,12 @@ export default function OnboardWizard({ onComplete }: OnboardWizardProps) {
       if (next.completed) {
         setTimeout(onComplete, 1500);
       }
-    } catch {
-      setError("Failed to submit answer. Please try again.");
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to submit answer. Please try again.",
+      );
     } finally {
       setIsLoading(false);
     }

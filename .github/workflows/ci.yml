@@ -72,6 +72,9 @@ jobs:
       - name: Type check
         run: cd packages/ui && npx tsc --noEmit
 
+      - name: API client error-path contract
+        run: cd packages/ui && npm run test:api
+
       - name: Build
         run: cd packages/ui && npm run build
         env:

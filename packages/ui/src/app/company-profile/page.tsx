@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useAskOEFormContext } from "@/components/askoe/AskOEContext";
 import {
+  ApiError,
   getCompanyProfile,
   updateCompanyProfile,
   type CompanyProfile,
@@ -261,6 +262,7 @@ export default function CompanyProfilePage() {
   const [profile, setProfile] = useState<CompanyProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<PendingValues | null>(null);
   const seqRef = useRef(0);
@@ -268,8 +270,12 @@ export default function CompanyProfilePage() {
   useEffect(() => {
     getCompanyProfile()
       .then(setProfile)
-      .catch((err: Error) => {
-        if (err.message === "404") setNotFound(true);
+      .catch((err: unknown) => {
+        // A missing profile is the expected first-run state; anything else is
+        // a real failure and used to be swallowed here, rendering a blank page
+        // with no explanation.
+        if (err instanceof ApiError && err.status === 404) setNotFound(true);
+        else setLoadError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => setLoading(false));
   }, []);
@@ -360,6 +366,12 @@ export default function CompanyProfilePage() {
           {loading && (
             <div className="flex items-center justify-center h-40">
               <div className="w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          )}
+
+          {loadError && (
+            <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-5 py-4">
+              <p className="text-sm text-red-400">{loadError}</p>
             </div>
           )}
 
