@@ -116,8 +116,12 @@ eval:
 		--scenarios ../../evals/scenarios/ \
 		--output ../../evals/results/
 
+# --env-file is required: Compose resolves ${VAR} from a .env in the COMPOSE
+# FILE's directory (docker/), not the repo root, so without this every
+# ${ANTHROPIC_API_KEY} / ${AUTH_SECRET} in the compose file expands to "" and
+# the API starts with no provider configured while the UI reports MissingSecret.
 docker:
-	docker compose -f docker/docker-compose.yml up --build
+	docker compose --env-file .env -f docker/docker-compose.yml up --build
 
 docker-down:
 	docker compose -f docker/docker-compose.yml down
