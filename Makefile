@@ -1,4 +1,4 @@
-.PHONY: dev stop test lint eval docker clean install install-agent-sdk discord
+.PHONY: dev stop test lint eval docker clean install install-agent-sdk link-env discord
 
 # UV_EXTRAS lets you pull in optional Python extras, e.g.
 #   make install UV_EXTRAS="--extra agent-sdk"
@@ -27,9 +27,28 @@ UI_PORT  ?= 3000
 # secret first.
 API_HOST ?= 127.0.0.1
 
-install:
+install: link-env
 	cd packages/core && uv sync $(UV_EXTRAS)
 	cd packages/ui && npm install
+
+# Next.js only reads .env files from its OWN project root, so the repo-root
+# .env — which is where .env.example puts AUTH_SECRET, AUTH_GOOGLE_ID,
+# AUTH_GOOGLE_SECRET, ALLOWED_EMAILS and BACKEND_BASE_URL — is invisible to the
+# UI. Symptom: the app redirects to /signin as designed, the page renders, and
+# then /api/auth/providers returns "There was a problem with the server
+# configuration" because NextAuth has no secret and no Google credentials.
+#
+# Linking it in as .env.local keeps the repo-root .env the single source of
+# truth (which .gitignore already assumes) and needs no duplication. .env.local
+# is gitignored at any depth and takes precedence over other .env files.
+#
+# Never clobbers an existing file — the -e/-L pair also catches a broken
+# symlink, which -e alone would miss and then fail on.
+link-env:
+	@if [ -f .env ] && [ ! -e packages/ui/.env.local ] && [ ! -L packages/ui/.env.local ]; then \
+		ln -s ../../.env packages/ui/.env.local && \
+		echo "Linked packages/ui/.env.local -> ../../.env (UI reads the repo-root .env)"; \
+	fi
 
 # Claude subscription backend (AGENT_SDK_ENABLED=true) — see README,
 # "Running on a Claude Subscription". Run this after a plain `make install`,
@@ -37,7 +56,7 @@ install:
 install-agent-sdk:
 	cd packages/core && uv sync --extra agent-sdk
 
-dev:
+dev: link-env
 	@echo "Starting Open Executive (API $(API_HOST):$(API_PORT), UI :$(UI_PORT))..."
 	@cd packages/core && uv run uvicorn openexecutive.api.main:app --reload --host $(API_HOST) --port $(API_PORT) &
 	@cd packages/ui && BACKEND_BASE_URL=http://localhost:$(API_PORT) npm run dev -- --port $(UI_PORT)
