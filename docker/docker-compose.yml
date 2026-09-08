@@ -18,6 +18,17 @@ services:
       - EXEC_EMAIL_ADDRESS=${EXEC_EMAIL_ADDRESS:-}
       # Must match the value the UI sends, or every proxied call 401s.
       - BACKEND_SHARED_SECRET=${BACKEND_SHARED_SECRET:-}
+      # Serve Claude calls from a Claude Pro/Max subscription instead of a
+      # metered ANTHROPIC_API_KEY. Generate the token on any machine that can
+      # complete the browser flow:
+      #     claude setup-token
+      # then put it in .env as CLAUDE_CODE_OAUTH_TOKEN. With this set you can
+      # leave ANTHROPIC_API_KEY empty.
+      # Note the trade-offs (rate limits are the real budget, no max_tokens or
+      # per-block cache_control) — see README, "Running on a Claude
+      # Subscription".
+      - AGENT_SDK_ENABLED=${AGENT_SDK_ENABLED:-false}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
     volumes:
       - executive_data:/data
     healthcheck:

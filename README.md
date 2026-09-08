@@ -485,6 +485,32 @@ This is the recommended way to run on a host where `next dev`/`next build` die
 with `Bus error`: the UI image is built on `node:22-alpine` (musl), so it never
 loads the glibc-linked `@next/swc` binary.
 
+### Running the container on your Claude subscription
+
+The API image ships the Agent SDK, so the container can serve Claude calls from
+a Claude Pro/Max subscription instead of a metered key. It authenticates with a
+long-lived token rather than an interactive login — generate it on any machine
+that can complete the browser flow:
+
+```bash
+claude setup-token          # prints a long-lived subscription token
+```
+
+Then in `.env` on the Docker host:
+
+```bash
+AGENT_SDK_ENABLED=true
+CLAUDE_CODE_OAUTH_TOKEN=<the token>
+# ANTHROPIC_API_KEY can be left empty
+```
+
+The same trade-offs apply as locally — see "Running on a Claude Subscription"
+below. Rate limits are the real budget, and one cross-domain turn can fan out to
+eight specialists.
+
+> Treat that token like a password: it is your subscription. Keep it in `.env`
+> (gitignored), not in the compose file, and only on a host you control.
+
 > The API is deliberately **not** published to the host — the UI reaches it over
 > the compose network, and the API has no authentication unless
 > `BACKEND_SHARED_SECRET` is set. Set that secret on **both** services if you
