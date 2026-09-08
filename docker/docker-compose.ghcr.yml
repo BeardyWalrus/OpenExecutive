@@ -1,0 +1,82 @@
+# Run Open Executive from prebuilt GHCR images — nothing is built locally.
+#
+#   docker compose --env-file .env -f docker/docker-compose.ghcr.yml up -d
+#
+# --env-file is required: Compose resolves ${VAR} from a .env in the COMPOSE
+# FILE's directory (docker/), not the repo root, so without it every value
+# below is empty.
+#
+# Pin a specific build instead of :latest with
+#   IMAGE_TAG=sha-<commit>  docker compose ... up -d
+services:
+  api:
+    image: ghcr.io/beardywalrus/openexecutive-api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    # Not published to the host: the UI reaches the API over the compose
+    # network, and the API has NO authentication unless BACKEND_SHARED_SECRET
+    # is set. Add a ports entry only if something outside this stack needs it,
+    # and set that secret first.
+    expose:
+      - "8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - VECTOR_STORE_PATH=/data/chroma_db
+      - COMPANY_PROFILE_PATH=/data/company/profile.yaml
+      - EPISODIC_DB_PATH=/data/episodic_memory.db
+      - ENABLE_CACHING=${ENABLE_CACHING:-true}
+      - BACKEND_SHARED_SECRET=${BACKEND_SHARED_SECRET:-}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+      - EXEC_EMAIL_ADDRESS=${EXEC_EMAIL_ADDRESS:-}
+      # Claude subscription backend. Leave false here — it drives the Claude
+      # Code CLI, which is not installed in this image and authenticates from
+      # a developer's own `claude auth login`, not a server's.
+      - AGENT_SDK_ENABLED=false
+    volumes:
+      - executive_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ui:
+    image: ghcr.io/beardywalrus/openexecutive-ui:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${UI_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      # Service name, not localhost — localhost inside this container is the
+      # UI itself, not the API.
+      - BACKEND_BASE_URL=http://api:8000
+      - BACKEND_SHARED_SECRET=${BACKEND_SHARED_SECRET:-}
+      # --- Google sign-in -------------------------------------------------
+      # AUTH_SECRET: openssl rand -base64 32. Without it every request fails
+      # with "There was a problem with the server configuration".
+      - AUTH_SECRET=${AUTH_SECRET:-}
+      - AUTH_GOOGLE_ID=${AUTH_GOOGLE_ID:-}
+      - AUTH_GOOGLE_SECRET=${AUTH_GOOGLE_SECRET:-}
+      # Required behind a reverse proxy so NextAuth trusts the forwarded host.
+      - AUTH_TRUST_HOST=${AUTH_TRUST_HOST:-true}
+      # AUTH_URL is the PUBLIC origin users type in, and it must match a
+      # redirect URI registered on the Google OAuth client.
+      #
+      # Google will not accept a raw IP address, and requires https for
+      # anything other than localhost. So on a Docker host reachable at
+      # http://192.168.x.x:3000 there is no value that works — see the README
+      # ("Google sign-in on a Docker host") for the two options: an SSH tunnel
+      # (keeps the browser on localhost, which Google does allow) or a real
+      # hostname with HTTPS in front.
+      #
+      # Leave UNSET when reaching it over a localhost tunnel.
+      - AUTH_URL=${AUTH_URL:-}
+      # Bootstrap allowlist, used until the People table has an email row.
+      # A valid Google login whose address is not here is still rejected.
+      - ALLOWED_EMAILS=${ALLOWED_EMAILS:-}
+    depends_on:
+      - api
+
+volumes:
+  executive_data:
+    driver: local
