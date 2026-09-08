@@ -143,6 +143,25 @@ Open http://localhost:3000 to start chatting with your executive. The API runs o
 > the bootstrap allowlist: it applies only until the People table has an email
 > row, after which the roster is authoritative.
 
+> **`Bus error` on `next dev` / `next build`?** The native `@next/swc` binary
+> Next ships is incompatible with some newer glibc versions (Ubuntu 25.10 /
+> glibc 2.42). SIGBUS kills the process, so you get `Bus error` and nothing
+> else — no stack, no app error. Check with `ldd --version`. Two ways round it:
+>
+> ```bash
+> # A. run the UI on the WASM SWC build (slower compiles, stays on the host)
+> cd packages/ui && npm install --no-save @next/swc-wasm-nodejs
+> cd ../.. && make dev-wasm
+>
+> # B. run in Docker, which uses node:22-alpine (musl, unaffected)
+> make docker
+> ```
+>
+> `make dev-wasm` exists because the recipe is not guessable: Turbopack needs
+> native bindings, so WASM implies `--webpack`; and deleting the native binary
+> is not enough on its own, since Next re-downloads it into `~/.cache/next-swc`
+> unless `NEXT_TEST_WASM=1` forces the WASM loader.
+
 > **Ports already in use?** Override either:
 >
 > ```bash

@@ -1,4 +1,4 @@
-.PHONY: dev stop test lint eval docker clean install install-agent-sdk link-env discord
+.PHONY: dev dev-wasm stop test lint eval docker clean install install-agent-sdk link-env discord
 
 # UV_EXTRAS lets you pull in optional Python extras, e.g.
 #   make install UV_EXTRAS="--extra agent-sdk"
@@ -26,6 +26,10 @@ UI_PORT  ?= 3000
 # anyone on the network your company data and your model spend. Set that
 # secret first.
 API_HOST ?= 127.0.0.1
+
+# Extra env and flags for the UI dev server; `dev-wasm` below sets both.
+UI_DEV_ENV ?=
+UI_DEV_FLAGS ?=
 
 install: link-env
 	cd packages/core && uv sync $(UV_EXTRAS)
@@ -59,7 +63,28 @@ install-agent-sdk:
 dev: link-env
 	@echo "Starting Open Executive (API $(API_HOST):$(API_PORT), UI :$(UI_PORT))..."
 	@cd packages/core && uv run uvicorn openexecutive.api.main:app --reload --host $(API_HOST) --port $(API_PORT) &
-	@cd packages/ui && BACKEND_BASE_URL=http://localhost:$(API_PORT) npm run dev -- --port $(UI_PORT)
+	@cd packages/ui && $(UI_DEV_ENV) BACKEND_BASE_URL=http://localhost:$(API_PORT) npm run dev -- $(UI_DEV_FLAGS) --port $(UI_PORT)
+
+# Run the UI on the WASM SWC build instead of the native @next/swc binary.
+# Needed where that binary is incompatible with the system glibc (Ubuntu 25.10
+# / glibc 2.42), which kills `next dev`, `next build` and `next start` outright
+# with "Bus error" and no further output.
+#
+# Two non-obvious requirements, both established by running it:
+#   * Turbopack requires native bindings, so WASM implies --webpack. Without
+#     it Next loads WASM and then refuses: "Turbopack is not supported on this
+#     platform ... Only WebAssembly (WASM) bindings were loaded".
+#   * Deleting the native binary is NOT enough on its own — Next re-downloads
+#     it into ~/.cache/next-swc. NEXT_TEST_WASM=1 is what actually forces the
+#     WASM path and blocks the native loader.
+#
+# Install the WASM build once (--no-save keeps this host-specific workaround
+# out of package.json and the lockfile):
+#   cd packages/ui && npm install --no-save @next/swc-wasm-nodejs
+#
+# Expect noticeably slower compiles than Turbopack.
+dev-wasm:
+	@$(MAKE) dev UI_DEV_ENV="NEXT_TEST_WASM=1" UI_DEV_FLAGS="--webpack"
 
 # Verify the dev ports are actually free, and fail loudly if they are not.
 # The previous `stop` piped lsof's output into xargs and echoed "Stopped."
