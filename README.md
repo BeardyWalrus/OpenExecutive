@@ -115,6 +115,18 @@ make dev
 
 Open http://localhost:3000 to start chatting with your executive. The API runs on port 8000 and the UI on 3000.
 
+> **The UI needs the repo-root `.env` linked in.** Next.js only reads `.env`
+> files from its own project root, so `packages/ui` never sees the root `.env`
+> where `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `ALLOWED_EMAILS`
+> and `BACKEND_BASE_URL` live. `make dev` and `make install` link it for you
+> (`packages/ui/.env.local` → `../../.env`, gitignored, never clobbering an
+> existing file); `make link-env` does it on its own.
+>
+> Without that link the failure is quiet: the app redirects to `/signin` and the
+> page renders normally, but signing in fails and `/api/auth/providers` returns
+> `There was a problem with the server configuration` — NextAuth has neither a
+> secret nor Google credentials.
+
 > **Ports already in use?** Override either:
 >
 > ```bash
