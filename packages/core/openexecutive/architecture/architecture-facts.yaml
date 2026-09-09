@@ -252,8 +252,12 @@ providers:
       delimited <conversation_history> transcript with the live user turn
       appended after it. A lone user turn is passed through verbatim (no
       wrapper) to avoid perturbing the CLI's prefix cache.
-    * usage.cost is None — subscription calls are not metered per request,
-      so cost dashboards can distinguish "not metered" from "free".
+    * usage.cost is a dollar-equivalent ESTIMATE, not a charge — subscription
+      calls are not metered per request, but the subscription's allowance is
+      what actually runs out, so the tokens are priced at Anthropic list rates
+      (providers/pricing.py) rather than reported as zero, which would make a
+      subscription install look free. usage.cost_is_estimate is True on this
+      path; the figure is None only when the model has no published price.
     * Anthropic server-side tools (web_search) carry no input_schema and
       cannot be re-hosted as MCP tools; they are dropped with a warning.
     * Rate limits are the real budget: one cross-domain chat turn can fan
@@ -1232,7 +1236,7 @@ audit:
     - alert — alert created by the triage pipeline
     - integration_inbound — Slack / Discord / email / Telegram / Google Chat message received
     - knowledge_retrieval — one row per `knowledge.retriever.retrieve()` call; details carry chunk counts + domains, full payload carries each chunk's source, distance, and text preview so the session view shows "which RAG chunks influenced this response"
-    - cache_event — one row per Anthropic streaming response (per Executive iteration + the committee revision pass); captures `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `stop_reason` so prompt-cache hits are visible per turn, plus `cost_usd` — the actual USD OpenRouter charged for the call (read from `usage.cost`; null on the Anthropic-direct path or for rows logged before cost capture shipped). This is the token-usage + cost source of truth aggregated by both `/audit/sessions/{id}` (per session) and `/audit/usage` (cross-session).
+    - cache_event — one row per Anthropic streaming response (per Executive iteration + the committee revision pass); captures `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `stop_reason` so prompt-cache hits are visible per turn, plus `cost_usd` and `cost_is_estimate`. `cost_usd` carries two different kinds of figure: the actual USD OpenRouter charged (read from `usage.cost`), or — on the Agent SDK / subscription path, which is not billed per call — a dollar-equivalent estimated from the token counts at Anthropic list prices (providers/pricing.py), because zero would hide the only number that maps to the subscription's allowance. `cost_is_estimate` distinguishes them. Null on the Anthropic-direct path (no cost wire, no estimate), for an unpriced model, or for rows logged before cost capture shipped. This is the token-usage + cost source of truth aggregated by both `/audit/sessions/{id}` (per session) and `/audit/usage` (cross-session).
     - memory_snapshot — one row at Executive turn entry; captures the system-block layout, conversation history length, episodic context (full text in `full_json`), and a company-profile hash so the session view can render "what the agent saw" before any API call
     - committee_review — one row per committee-reviewed turn; carries draft length, final length, per-reviewer critiques and timings (previously emitted but newly declared as a recognised event_type)
     - peer_memory — one row per `openexecutive.memory.honcho_client` call (prefetch / sync_turn / directional_chat / prefetch_department / sync_department_turn / append_department_note); carries `op`, `person_id`, optional `department_slug`, `outcome` (ok / timeout / error / disabled / no_person / no_department / no_loop / empty), `duration_ms`, plus op-specific details (query preview, reasoning_level, peer count, co_present_person_ids, co_present_department_slugs, originating_person_id, target_person_id, session_id, kind) so the flow-chart view renders the peer_memory path alongside `<retrieved_context>` and `<past_decisions>`. Disabled / no-Person / no-Department turns still emit (outcome marker) so audit absence equals "code path never ran" instead of "the provider was down."

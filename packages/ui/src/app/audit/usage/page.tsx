@@ -178,7 +178,7 @@ export default function TokenUsagePage() {
           {/* Totals */}
           {totals ? (
             <div className="mt-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-              <StatCard label="Cost (USD)" value={fmtCost(totals.cost_usd)} hint="actual charged" />
+              <StatCard label="Cost (USD)" value={fmtCost(totals.cost_usd)} hint="charged, or estimated on a subscription" />
               <StatCard label="Calls" value={fmtInt(totals.calls)} />
               <StatCard label="Cache hit" value={`${cacheHitPct(totals)}%`} hint="of prompt input served from cache" />
               <StatCard label="Output tokens" value={fmtInt(totals.output_tokens)} />

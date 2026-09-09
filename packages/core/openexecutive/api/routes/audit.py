@@ -116,9 +116,14 @@ class CostSummary(TokenCounts):
 class UsageTotals(TokenCounts):
     """Token + cost totals over a window, summed across all `cache_event` rows.
 
-    `cost_usd` is the actual OpenRouter-charged amount captured per call; rows
-    that predate cost capture (or non-OpenRouter calls) contribute 0, so the
-    figure accrues from go-live rather than being a back-estimated guess."""
+    `cost_usd` sums two kinds of figure. OpenRouter reports what it actually
+    charged; the Agent SDK (Claude subscription) path is not billed per call and
+    instead reports a dollar-equivalent estimated from token counts at list
+    prices, because a subscription's allowance is the real budget and zero would
+    hide it. Rows carry `cost_is_estimate`, but this aggregate does NOT split on
+    it — on a mixed-provider install the total is therefore neither purely
+    billed nor purely estimated. Rows that predate cost capture, and the
+    Anthropic-direct path (no cost wire, no estimate), contribute 0."""
     cost_usd: float
 
 

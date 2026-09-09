@@ -337,17 +337,25 @@ def _emit_cache_event(
     cache_create = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
     cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
     stop_reason = getattr(final_msg, "stop_reason", None)
-    # Actual USD charged for this call, surfaced by OpenRouter when usage
-    # accounting is enabled. None on the Anthropic-direct path (no cost wire);
-    # stored as-is so aggregation treats a missing cost as 0.
+    # USD for this call. Two different kinds of number share this field:
+    # OpenRouter wires back what it ACTUALLY charged, while the Agent SDK
+    # (subscription) path has nothing to charge and instead reports a
+    # dollar-equivalent estimated from token counts at list prices. Both are
+    # worth recording -- a subscription's allowance is what runs out, and
+    # zero would hide it -- but they must not be silently interchangeable, so
+    # `cost_is_estimate` travels with the figure. Still None on the
+    # Anthropic-direct path (no cost wire, no estimate); aggregation treats a
+    # missing cost as 0.
     raw_cost = getattr(usage, "cost", None)
     try:
         cost_usd = float(raw_cost) if raw_cost is not None else None
     except (TypeError, ValueError):
         cost_usd = None
+    cost_is_estimate = bool(getattr(usage, "cost_is_estimate", False))
     audit_log(
         "cache_event",
-        f"{model} iter={iteration} in={inp} out={out} cache_read={cache_read} cache_create={cache_create} cost={cost_usd} stop={stop_reason}",
+        f"{model} iter={iteration} in={inp} out={out} cache_read={cache_read} "
+        f"cache_create={cache_create} cost={cost_usd}{' (est)' if cost_is_estimate else ''} stop={stop_reason}",
         session_id=session_id,
         turn_id=turn_id,
         actor=actor,
@@ -359,6 +367,7 @@ def _emit_cache_event(
             "cache_creation_input_tokens": cache_create,
             "cache_read_input_tokens": cache_read,
             "cost_usd": cost_usd,
+            "cost_is_estimate": cost_is_estimate,
             "stop_reason": stop_reason,
         },
     )
