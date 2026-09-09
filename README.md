@@ -506,6 +506,102 @@ This is the recommended way to run on a host where `next dev`/`next build` die
 with `Bus error`: the UI image is built on `node:22-alpine` (musl), so it never
 loads the glibc-linked `@next/swc` binary.
 
+### Running on Unraid
+
+Use a **bind mount to appdata** rather than the managed volume. Set
+`DATA_PATH` and the state becomes ordinary files under
+`/mnt/user/appdata/openexec/data` — browsable over SMB, backed up with the rest
+of appdata, and loadable by copying files in rather than reaching into a volume
+through a container.
+
+The API image runs as root and the UI image never touches the mount, so no
+`PUID`/`PGID` juggling is needed.
+
+**Compose Manager plugin** (recommended — the API stays unpublished, and
+container-name DNS works inside the stack). Install *Compose Manager* from
+Community Applications, add a stack, and paste this as the compose file, filling
+in the marked values:
+
+```yaml
+services:
+  api:
+    image: ghcr.io/beardywalrus/openexecutive-api:latest
+    container_name: openexec-api
+    restart: unless-stopped
+    expose: ["8000"]
+    environment:
+      AGENT_SDK_ENABLED: "true"
+      CLAUDE_CODE_OAUTH_TOKEN: "PASTE-claude-setup-token-OUTPUT"
+      ANTHROPIC_API_KEY: ""
+      VECTOR_STORE_PATH: /data/chroma_db
+      COMPANY_PROFILE_PATH: /data/company/profile.yaml
+      EPISODIC_DB_PATH: /data/episodic_memory.db
+      ENABLE_CACHING: "true"
+    volumes:
+      - /mnt/user/appdata/openexec/data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ui:
+    image: ghcr.io/beardywalrus/openexecutive-ui:latest
+    container_name: openexec-ui
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      BACKEND_BASE_URL: http://api:8000
+      DISABLE_AUTH: "true"
+      AUTH_TRUST_HOST: "true"
+    depends_on:
+      - api
+```
+
+Then `http://<unraid-ip>:3000`. Values are inlined deliberately: Compose Manager
+stores each stack in its own project directory, and where it looks for a `.env`
+varies by version, so a self-contained file removes a step that silently
+produces empty variables.
+
+**Or two containers via Add Container.** Unraid's default `bridge` gives no
+container-name DNS, so create a user-defined network first (once, over SSH or
+the terminal):
+
+```bash
+docker network create openexec
+```
+
+It then appears in each template's *Network Type* dropdown.
+
+| Field | `openexec-api` | `openexec-ui` |
+|---|---|---|
+| Repository | `ghcr.io/beardywalrus/openexecutive-api:latest` | `ghcr.io/beardywalrus/openexecutive-ui:latest` |
+| Network Type | `openexec` | `openexec` |
+| Port | *(none — keep it off the LAN)* | `3000` → `3000` |
+| WebUI | — | `http://[IP]:[PORT:3000]` |
+| Path | `/data` → `/mnt/user/appdata/openexec/data`, RW | *(none)* |
+| Variables | `AGENT_SDK_ENABLED=true`, `CLAUDE_CODE_OAUTH_TOKEN=…`, `VECTOR_STORE_PATH=/data/chroma_db`, `COMPANY_PROFILE_PATH=/data/company/profile.yaml`, `EPISODIC_DB_PATH=/data/episodic_memory.db` | `BACKEND_BASE_URL=http://openexec-api:8000`, `DISABLE_AUTH=true`, `AUTH_TRUST_HOST=true`, `NODE_ENV=production` |
+
+Note `BACKEND_BASE_URL` differs between the two routes: Compose addresses the
+service (`api`), the template UI addresses the container name
+(`openexec-api`).
+
+Skipping the custom network means publishing the API and pointing the UI at
+`http://<unraid-ip>:8000` — which puts an API with **no authentication** on the
+LAN. If you do that, set `BACKEND_SHARED_SECRET` to the same value on both
+containers first; the UI stamps it as `x-api-key` and the API rejects requests
+without it.
+
+`DISABLE_AUTH=true` means anyone who can reach port 3000 is the executive. That
+is the intended mode for a single user on a trusted LAN — see "Running with no
+sign-in at all" below before exposing it further.
+
+Updating is *Check for Updates* → *Apply*, or `docker compose pull && up -d`.
+State lives in the mount, which neither touches, and the API migrates its own
+schema on boot.
+
 ### Moving an existing install into Docker
 
 A native install accumulates state in three places, and they do not share a
