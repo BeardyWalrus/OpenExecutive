@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Walk up from this file to find the repo root .env. If no .env exists
@@ -660,5 +660,43 @@ class Settings(BaseSettings):
         return self
 
 
+class SettingsError(ValueError):
+    """Configuration that cannot produce a usable ``Settings``.
+
+    Subclasses ``ValueError`` so existing ``pytest.raises(ValueError)`` call
+    sites and any caller catching the pydantic error (itself a ``ValueError``)
+    keep working.
+    """
+
+
+def _settings_error_message(exc: ValidationError) -> str:
+    """A short, actionable summary of what is wrong with the configuration.
+
+    The raw pydantic error is accurate but lands at the bottom of ~100 lines of
+    FastAPI lifespan recursion, re-printed on every restart of a crash-looping
+    container — so the one line that matters is the easiest to miss. Lead with
+    the offending variables and where to set them.
+    """
+    lines = ["Configuration is invalid — the API cannot start.", ""]
+    for err in exc.errors():
+        name = ".".join(str(part) for part in err.get("loc", ())) or "(unknown)"
+        lines.append(f"  {name}: {err.get('msg', 'invalid')}")
+    lines += [
+        "",
+        "Set these where this process reads configuration: the `environment:`",
+        "block of your compose file or Unraid template, or the repo-root `.env`",
+        "(copy `.env.example`).",
+        "",
+        "EXEC_EMAIL_ADDRESS is the only setting with no default. It is the",
+        "address the Executive sends and polls as, so it is never guessed — but",
+        "an empty string is accepted when the email integration is unused, which",
+        "is what docker-compose.ghcr.yml passes by default.",
+    ]
+    return "\n".join(lines)
+
+
 def get_settings() -> Settings:
-    return Settings()  # type: ignore[call-arg]
+    try:
+        return Settings()  # type: ignore[call-arg]
+    except ValidationError as exc:
+        raise SettingsError(_settings_error_message(exc)) from exc
