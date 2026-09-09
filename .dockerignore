@@ -34,6 +34,10 @@ chroma_db
 .env.*
 !.env.example
 
+# State archives from `make docker-export` — company documents, client slots and
+# the database. Never belongs in a build context.
+*.tar.gz
+
 # Local company data (gitignored; not needed in the image)
 company
 

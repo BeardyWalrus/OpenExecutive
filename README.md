@@ -541,16 +541,25 @@ and your `.env`, then load it into the volume before the first start:
 ```bash
 docker compose --env-file .env -f docker/docker-compose.ghcr.yml run --rm \
   --no-deps -v "$(pwd)/openexec-state.tar.gz:/state.tar.gz:ro" \
-  api tar -xzf /state.tar.gz -C /data
+  api tar --no-same-owner --no-same-permissions -xzf /state.tar.gz -C /data
 docker compose --env-file .env -f docker/docker-compose.ghcr.yml up -d
 ```
+
+The image sets no `USER`, so that `tar` runs as root — where GNU tar restores
+archived ownership and modes by default, setuid bits included, from a file that
+has crossed hosts by whatever channel you chose. `--no-same-owner
+--no-same-permissions` declines that.
+
+`-C /data` **merges** into whatever is already in the volume rather than
+replacing it, so "before the first start" is load-bearing: loading over a volume
+an earlier run already populated leaves you with a mix of both.
 
 `run --rm --no-deps` borrows the `api` service purely for its volume mount, so
 Compose resolves the volume name itself — worth knowing, because the volume is
 named after the Compose project (`docker_executive_data` when the project name
 comes from the `docker/` directory), not `executive_data`.
 
-Two things do **not** come across in the tarball, by design:
+Three things do **not** come across in the tarball, by design:
 
 - **Your `.env`.** Rewrite it for the host rather than copying it: the compose
   file sets `BACKEND_BASE_URL` itself, and a stale `localhost:8001` from a
@@ -558,6 +567,18 @@ Two things do **not** come across in the tarball, by design:
 - **Your Claude login.** `claude auth login` writes credentials to your home
   directory, which the container does not share. Generate a token instead —
   see the next section.
+- **Google Workspace credentials.** `scripts/mint-google-token.py` writes them
+  to `.gworkspace-credentials/`, while the container reads
+  `WORKSPACE_MCP_CREDENTIALS_DIR=/data/google_credentials`. Re-mint them against
+  the container rather than copying, and note the converse: if you ever point
+  `WORKSPACE_MCP_CREDENTIALS_DIR` *inside* `company/`, a live refresh token gets
+  swept into the tarball.
+
+Symlinks under `company/` are skipped rather than followed, and the export says
+so — otherwise a link into a docs folder elsewhere on the machine would archive
+that folder's contents into a file destined for another host. Do check
+`company/mcp_servers.json`, which *does* travel: the example uses `$VAR`
+references, but nothing stops a literal token being pasted in.
 
 ### Running the container on your Claude subscription
 
