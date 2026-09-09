@@ -13,6 +13,7 @@ import json
 import logging
 from dataclasses import dataclass
 
+from openexecutive.audit.usage import emit_cache_event
 from openexecutive.orchestrator.router import SPECIALIST_DESCRIPTIONS
 from openexecutive.prompts.committee_prompts import DOMAIN_REVIEWER_SYSTEM_TEMPLATE
 from openexecutive.providers import get_provider
@@ -120,6 +121,9 @@ class Reviewer:
                     }
                 ],
                 messages=[{"role": "user", "content": user_content}],
+            )
+            emit_cache_event(
+                final_msg=msg, model=self.model, actor=f"reviewer:{self.name}"
             )
             text_blocks = [b for b in msg.content if b.type == "text"]
             text = text_blocks[0].text if text_blocks else ""

@@ -144,10 +144,20 @@ class BaseAgent(ABC):
         # The fan-out is where a cross-domain turn spends most of its tokens,
         # so without this row /audit/usage undercounts real usage by more than
         # it counts. session_id / turn_id come from the audit ContextVars the
-        # Executive bound for this turn; they propagate into the tasks a
-        # parallel fan-out creates.
-        emit_cache_event(final_msg=message, model=model, actor=self.name,
-                         department=self.domain)
+        # Executive bound for this turn; they propagate into the tasks the
+        # parallel fan-out creates (router.py dispatches with asyncio.gather,
+        # and Tasks copy the context at creation).
+        #
+        # Deliberately NOT tagged with a department. `self.domain` is not a
+        # department slug -- board_comms has domain "board" against slug
+        # "board_comms", and domains like triage/talent/utility have no
+        # department at all -- so tagging would attach values no slug matches.
+        # Worse, cache_event would become the highest-volume department-tagged
+        # event, and workflows/department_check_in.py reads the 30 most recent
+        # audit rows BEFORE filtering by department: these rows would crowd out
+        # the decisions that check-in exists to summarise. `actor` carries the
+        # attribution without either problem.
+        emit_cache_event(final_msg=message, model=model, actor=self.name)
 
         text_blocks = [b for b in message.content if b.type == "text"]
         if not text_blocks:
@@ -239,6 +249,5 @@ class BaseAgent(ABC):
         message = await provider.messages_create(**create_kwargs)
         # Same reason as analyze(): a workflow's specialist calls are real
         # spend and were equally invisible.
-        emit_cache_event(final_msg=message, model=model, actor=self.name,
-                         department=self.domain)
+        emit_cache_event(final_msg=message, model=model, actor=self.name)
         return message
