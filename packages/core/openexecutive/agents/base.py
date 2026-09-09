@@ -4,6 +4,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
+from openexecutive.audit.usage import emit_cache_event
 from openexecutive.config import get_settings
 from openexecutive.providers import get_provider, model_supports_deep_reasoning
 
@@ -140,6 +141,13 @@ class BaseAgent(ABC):
         # wiring lands in the next commit.
         provider = get_provider(model)
         message = await provider.messages_create(**create_kwargs)
+        # The fan-out is where a cross-domain turn spends most of its tokens,
+        # so without this row /audit/usage undercounts real usage by more than
+        # it counts. session_id / turn_id come from the audit ContextVars the
+        # Executive bound for this turn; they propagate into the tasks a
+        # parallel fan-out creates.
+        emit_cache_event(final_msg=message, model=model, actor=self.name,
+                         department=self.domain)
 
         text_blocks = [b for b in message.content if b.type == "text"]
         if not text_blocks:
@@ -228,4 +236,9 @@ class BaseAgent(ABC):
             create_kwargs["max_tokens"] = max(max_tokens, 16000)
 
         provider = get_provider(model)
-        return await provider.messages_create(**create_kwargs)
+        message = await provider.messages_create(**create_kwargs)
+        # Same reason as analyze(): a workflow's specialist calls are real
+        # spend and were equally invisible.
+        emit_cache_event(final_msg=message, model=model, actor=self.name,
+                         department=self.domain)
+        return message
