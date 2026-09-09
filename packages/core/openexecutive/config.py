@@ -22,11 +22,64 @@ if not _FOUND_ENV:
 _ENV_FILE = _ROOT / ".env"
 
 
+def _blank_or_comment(v: Any) -> bool:
+    """True for unset, '', or a dotenv inline-comment captured as the value.
+
+    Optional keys are often left as `KEY=`. `make dev` exports those as
+    empty strings; an inline `# comment` on the same line can instead be
+    parsed as the value. Both must map to "unset".
+    """
+    return v is None or (
+        isinstance(v, str) and (not v.strip() or v.strip().startswith("#"))
+    )
+
+
+# Vendor prefixes surfaced from the live OpenRouter catalog when
+# OPENROUTER_CATALOG_PROVIDERS is unset. Lives here (not in providers/) so
+# providers.openrouter_catalog can import it without a config→providers cycle.
+_DEFAULT_OPENROUTER_CATALOG_PROVIDERS: tuple[str, ...] = (
+    "openai",
+    "google",
+    "anthropic",
+    "meta-llama",
+    "deepseek",
+    "x-ai",
+)
+# Six hours: OpenRouter adds models a few times a month, so anything tighter
+# is wasted requests; a restart also refreshes.
+_DEFAULT_OPENROUTER_CATALOG_REFRESH_S = 6 * 60 * 60.0
+
+
+def _parse_csv_list(v: Any) -> list[str]:
+    """Env-var list parsing shared by the comma-separated ``*_MODELS`` /
+    ``*_PROVIDERS`` settings: accepts a real list or ``"a, b,,c"``, strips
+    whitespace, drops empties. Anything else → ``[]``."""
+    if isinstance(v, (list, tuple)):
+        items = [str(x) for x in v]
+    elif isinstance(v, str):
+        items = v.split(",")
+    else:
+        return []
+    return [x.strip() for x in items if x.strip()]
+
+
+
+# Bounds for the external-monitor freshness settings, shared with
+# monitoring.sources.base so the per-row override is validated against the
+# same range as the env var. One year of future skew / a century of age is
+# far past any sane value and well inside datetime arithmetic limits.
+MAX_FUTURE_SKEW_HOURS = 24 * 365
+MAX_SIGNAL_AGE_DAYS = 365 * 100
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
+        # .env.example (and copies of it) leave optional keys as `KEY=`.
+        # `make dev` exports those as empty strings; without this flag an
+        # optional int like DISCORD_NOTIFY_CHANNEL_ID crashes startup.
+        env_ignore_empty=True,
     )
 
     # Optional: a deployment can run entirely on local / OpenRouter models
@@ -36,16 +89,16 @@ class Settings(BaseSettings):
     # while this is unset.
     anthropic_api_key: str | None = Field(None, alias="ANTHROPIC_API_KEY")
 
-    default_model: str = Field("claude-sonnet-4-6", alias="DEFAULT_MODEL")
-    deep_reasoning_model: str = Field("claude-opus-4-7", alias="DEEP_REASONING_MODEL")
-    routing_model: str = Field("claude-haiku-4-5-20251001", alias="ROUTING_MODEL")
+    default_model: str = Field("claude-sonnet-5", alias="DEFAULT_MODEL")
+    deep_reasoning_model: str = Field("claude-opus-5", alias="DEEP_REASONING_MODEL")
+    routing_model: str = Field("claude-haiku-4-5", alias="ROUTING_MODEL")
     # Model for the executive_research specialist fan-out (research-mode turn
     # only — the chat path still uses each agent's deep_reasoning_model). The
     # research turn is retrieve-from-web-search + summarize, which does not
     # need Opus-tier reasoning; running 7 specialists on Sonnet (deep reasoning
-    # off) instead of Opus 4.7 is the dominant cost lever for the workflow.
-    # Set RESEARCH_MODEL=claude-opus-4-7 to restore the prior behavior.
-    research_model: str = Field("claude-sonnet-4-6", alias="RESEARCH_MODEL")
+    # off) instead of Opus is the dominant cost lever for the workflow.
+    # Set RESEARCH_MODEL=claude-opus-5 to restore the prior behavior.
+    research_model: str = Field("claude-sonnet-5", alias="RESEARCH_MODEL")
 
     vector_store_path: Path = Field(_ROOT / "chroma_db", alias="VECTOR_STORE_PATH")
     company_profile_path: Path = Field(
@@ -89,6 +142,39 @@ class Settings(BaseSettings):
     openrouter_app_title: str = Field("Open Executive", alias="OPENROUTER_APP_TITLE")
     openrouter_referer: str | None = Field(None, alias="OPENROUTER_REFERER")
     openrouter_timeout_s: float = Field(180.0, alias="OPENROUTER_TIMEOUT_S")
+
+    # ---- OpenRouter live model catalog ---------------------------------
+    # With OPENROUTER_ENABLED on, the API fetches OpenRouter's public
+    # /models catalog at startup (and every OPENROUTER_CATALOG_REFRESH_S)
+    # to populate the non-Anthropic entries of the Council UI dropdown, so
+    # newly released models appear without a code change. A failed fetch
+    # falls back to the hardcoded snapshot in providers.registry. Only
+    # consulted when OPENROUTER_ENABLED=true.
+    openrouter_catalog_enabled: bool = Field(True, alias="OPENROUTER_CATALOG_ENABLED")
+    # Vendor prefixes (the part before "/" in an OpenRouter slug) to surface.
+    openrouter_catalog_providers: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: list(_DEFAULT_OPENROUTER_CATALOG_PROVIDERS),
+        alias="OPENROUTER_CATALOG_PROVIDERS",
+    )
+    # Newest N tool-capable paid models per vendor. 0 = no cap.
+    openrouter_catalog_per_provider: int = Field(
+        6, alias="OPENROUTER_CATALOG_PER_PROVIDER"
+    )
+    # Startup fetch is awaited, so keep this short — it bounds boot latency.
+    openrouter_catalog_timeout_s: float = Field(
+        10.0, alias="OPENROUTER_CATALOG_TIMEOUT_S"
+    )
+    # Background re-fetch cadence. 0 disables the refresher (startup only).
+    openrouter_catalog_refresh_s: float = Field(
+        _DEFAULT_OPENROUTER_CATALOG_REFRESH_S, alias="OPENROUTER_CATALOG_REFRESH_S"
+    )
+
+    @field_validator("openrouter_catalog_providers", mode="before")
+    @classmethod
+    def _parse_openrouter_catalog_providers(cls, v: Any) -> list[str]:
+        # An explicitly empty value falls back to the default set rather than
+        # surfacing zero vendors (which would blank the dropdown).
+        return _parse_csv_list(v) or list(_DEFAULT_OPENROUTER_CATALOG_PROVIDERS)
 
     # Per-call wall-clock cap for the utility_fast paths (Discord response
     # gate, wait_for_human decision parser, inbound_resolver disambiguation).
@@ -142,11 +228,7 @@ class Settings(BaseSettings):
     @field_validator("local_models", mode="before")
     @classmethod
     def _parse_local_models(cls, v: Any) -> list[str]:
-        if isinstance(v, list):
-            return [str(x).strip() for x in v if str(x).strip()]
-        if isinstance(v, str) and v.strip():
-            return [x.strip() for x in v.split(",") if x.strip()]
-        return []
+        return _parse_csv_list(v)
 
     @model_validator(mode="after")
     def _validate_local_models(self) -> "Settings":
@@ -244,11 +326,14 @@ class Settings(BaseSettings):
     # full-pass revision on top of the draft, typically 5–12s.
     committee_extra_timeout_s: float = Field(60.0, alias="COMMITTEE_EXTRA_TIMEOUT_S")
 
-    # Reasoning effort for deep-reasoning specialists. Opus 4.7 only supports
-    # `thinking.type=adaptive` paired with `output_config.effort`. Valid
-    # values: "low", "medium", "high", "xhigh", "max". `low` is ~3x faster
-    # and much cheaper; bump to `medium` when answers feel shallow.
-    specialist_effort: str = Field("low", alias="SPECIALIST_EFFORT")
+    # Reasoning effort for deep-reasoning specialists (adaptive thinking +
+    # `output_config.effort`; translated to OpenRouter `reasoning.effort` on
+    # that path). Validated at boot: an invalid value used to 400 on Anthropic
+    # direct and would otherwise be silently coerced on OpenRouter. `low` is
+    # ~3x faster and much cheaper; bump to `medium` when answers feel shallow.
+    specialist_effort: Literal["low", "medium", "high", "xhigh", "max"] = Field(
+        "low", alias="SPECIALIST_EFFORT"
+    )
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> "Settings":
@@ -307,6 +392,13 @@ class Settings(BaseSettings):
         True, alias="DISCORD_THREAD_RESPONSE_GATE_ENABLED"
     )
 
+    @field_validator("discord_notify_channel_id", mode="before")
+    @classmethod
+    def _parse_notify_channel_id(cls, v: Any) -> Any:
+        if _blank_or_comment(v):
+            return None
+        return v
+
     # @mention auto-thread router. The default mode promotes nearly every
     # plain-channel @mention into a fresh auto-titled thread (with a
     # one-line pointer left behind in the channel) — except when the
@@ -340,22 +432,11 @@ class Settings(BaseSettings):
             return [int(x) for x in v]
         if isinstance(v, (int, float)):
             return [int(v)]
-        if isinstance(v, str) and v.strip():
+        if _blank_or_comment(v):
+            return []
+        if isinstance(v, str):
             return [int(x.strip()) for x in v.split(",") if x.strip()]
         return []
-
-    @field_validator("discord_notify_channel_id", mode="before")
-    @classmethod
-    def _parse_notify_channel_id(cls, v: Any) -> Any:
-        # `.env.example` ships this key blank, and dotenv hands a blank line
-        # through as "" rather than omitting it — which pydantic then refuses
-        # to parse as an int, so merely copying the example file crashed
-        # startup. Treat blank as "unset", matching the None default.
-        # `_parse_guild_ids` above already does this for the sibling list
-        # field; this is the same contract for the scalar.
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
 
     google_chat_service_account_file: str | None = Field(
         None, alias="GOOGLE_CHAT_SERVICE_ACCOUNT_FILE"
@@ -446,7 +527,7 @@ class Settings(BaseSettings):
     )
     # Cheap model for the per-finding verify call (read scraped page → verdict).
     research_verify_model: str = Field(
-        "claude-haiku-4-5-20251001", alias="RESEARCH_VERIFY_MODEL"
+        "claude-haiku-4-5", alias="RESEARCH_VERIFY_MODEL"
     )
     # Hard cap on findings verified per research run (each = 1 scrape + 1 cheap
     # LLM call). Bounds added cost; verified in severity order.
@@ -583,6 +664,29 @@ class Settings(BaseSettings):
     external_monitor_max_signals_per_scan: int = Field(
         50, alias="EXTERNAL_MONITOR_MAX_SIGNALS_PER_SCAN"
     )
+    # Freshness gate for sources that carry an upstream publish timestamp
+    # (rss <pubDate>, edgar filing date). A signal whose ``published_at`` is
+    # older than this many days at capture time is recorded but never
+    # promoted (outcome ``suppressed_stale``) — a feed that resurfaces a
+    # January article in September must not become September news (issue
+    # #80). 0 disables the gate. A timestamp more than a day in the FUTURE
+    # is deferred instead (skipped, not recorded, re-judged once the date
+    # passes) so a feed can't mute an announcement by post-dating it.
+    # Sources without an upstream timestamp (stock, page_watch, query) are
+    # unaffected.
+    external_monitor_max_signal_age_days: int = Field(
+        7, ge=0, le=MAX_SIGNAL_AGE_DAYS, alias="EXTERNAL_MONITOR_MAX_SIGNAL_AGE_DAYS"
+    )
+    # How far ahead of our clock a published_at may be before the entry is
+    # deferred (skipped for the tick, re-judged once the date passes; one
+    # ``external_signal_deferred`` audit row per poll). 0 disables the
+    # deferral — use it for feeds that legitimately date entries ahead
+    # (scheduled-maintenance or event calendars).
+    # Per-row override: ``config_json["max_future_skew_hours"]`` (0 = off
+    # for that row only) — the global switch affects every feed.
+    external_monitor_max_future_skew_hours: int = Field(
+        24, ge=0, le=MAX_FUTURE_SKEW_HOURS, alias="EXTERNAL_MONITOR_MAX_FUTURE_SKEW_HOURS"
+    )
     # Adapter-fetch ceiling (bytes). Caps the body we read from any single
     # external feed — defence against runaway sources (e.g. malformed RSS
     # that streams forever) and a soft guard against XML-bomb shapes.
@@ -640,6 +744,29 @@ class Settings(BaseSettings):
     watchlist_research_max_staleness_hours: int = Field(
         24, alias="WATCHLIST_RESEARCH_MAX_STALENESS_HOURS"
     )
+
+    # Notion → isolated wiki-collection sync. OFF by default. When on, a
+    # scheduler heartbeat incrementally re-indexes pages shared with the
+    # Notion internal integration into the NOTION Chroma collection (not
+    # COMPANY — synced pages are multi-writer and unreviewed). Only those
+    # shared pages are visible — share the company wiki with the bot.
+    notion_sync_enabled: bool = Field(False, alias="NOTION_SYNC_ENABLED")
+    notion_api_key: str | None = Field(None, alias="NOTION_API_KEY")
+    notion_sync_interval_minutes: int = Field(
+        60, alias="NOTION_SYNC_INTERVAL_MINUTES"
+    )
+    notion_max_pages_per_scan: int = Field(
+        40, alias="NOTION_MAX_PAGES_PER_SCAN"
+    )
+
+    @model_validator(mode="after")
+    def _validate_notion_sync(self) -> "Settings":
+        if self.notion_sync_enabled and not self.notion_api_key:
+            raise ValueError(
+                "NOTION_SYNC_ENABLED=true requires NOTION_API_KEY "
+                "(Notion internal integration secret)"
+            )
+        return self
 
     @field_validator("user_timezone")
     @classmethod

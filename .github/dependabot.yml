@@ -6,6 +6,12 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
+    # mcp 2.x removed mcp.server.fastmcp (renamed to MCPServer), and the API
+    # image build resolves from pyproject.toml, so widening the <2 cap ships a
+    # boot crash. Keep dependabot on 1.x until the code migrates to the 2.x API.
+    ignore:
+      - dependency-name: "mcp"
+        versions: [">=2"]
     groups:
       python-dependencies:
         patterns:

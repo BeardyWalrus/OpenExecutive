@@ -33,7 +33,7 @@ dependencies = [
     # openexecutive/mcp_server/server.py at import time. It did — a rebuilt
     # image crash-looped on ModuleNotFoundError while the lockfile-installed
     # native venv stayed on 1.27.1 and was fine.
-    "mcp>=1.2.0,<2",
+    "mcp<2,>=1.2.0",
     "honcho-ai>=2.0,<3",
     "defusedxml>=0.7.1",
     "feedparser>=6.0.11",

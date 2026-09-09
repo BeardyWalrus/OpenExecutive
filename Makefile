@@ -66,11 +66,19 @@ install-agent-sdk:
 # backend that never came up. Check both ports first and refuse to start,
 # naming the process in the way — the error message is otherwise the only
 # clue, and it names neither the port nor the owner.
+#
+# Both lines source the repo-root .env into the process env (upstream #44):
+# link-env covers the UI, because Next auto-loads only packages/ui/.env*, but
+# it does nothing for the API — BACKEND_SHARED_SECRET and
+# BACKEND_ALLOWED_ORIGINS are read from os.environ rather than pydantic
+# Settings, so dotenv alone left the API's gate silently open. Exported values
+# win over .env.local for duplicate keys. .env values must be shell-safe:
+# quote anything containing spaces or `$$`.
 dev: link-env
 	@python3 -c "$$PORT_SCAN" preflight "$(API_PORT)" "$(UI_PORT)"
 	@echo "Starting Open Executive (API $(API_HOST):$(API_PORT), UI :$(UI_PORT))..."
-	@cd packages/core && uv run uvicorn openexecutive.api.main:app --reload --host $(API_HOST) --port $(API_PORT) &
-	@cd packages/ui && $(UI_DEV_ENV) BACKEND_BASE_URL=http://localhost:$(API_PORT) npm run dev -- $(UI_DEV_FLAGS) --port $(UI_PORT)
+	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; cd packages/core && uv run uvicorn openexecutive.api.main:app --reload --host $(API_HOST) --port $(API_PORT) &
+	@if [ -f .env ]; then set -a; . ./.env; set +a; fi; cd packages/ui && $(UI_DEV_ENV) BACKEND_BASE_URL=http://localhost:$(API_PORT) npm run dev -- $(UI_DEV_FLAGS) --port $(UI_PORT)
 
 # Run the UI on the WASM SWC build instead of the native @next/swc binary.
 # Needed where that binary is incompatible with the system glibc (Ubuntu 25.10
@@ -272,15 +280,16 @@ eval:
 		--scenarios ../../evals/scenarios/ \
 		--output ../../evals/results/
 
-# --env-file is required: Compose resolves ${VAR} from a .env in the COMPOSE
-# FILE's directory (docker/), not the repo root, so without this every
-# ${ANTHROPIC_API_KEY} / ${AUTH_SECRET} in the compose file expands to "" and
-# the API starts with no provider configured while the UI reports MissingSecret.
+# --env-file makes ${VAR} interpolation in docker-compose.yml read the
+# repo-root .env (compose only auto-reads docker/.env otherwise). The
+# containers additionally load the full .env via each service's env_file.
+COMPOSE_ENV_FILE := $(if $(wildcard .env),--env-file .env,)
+
 docker:
-	docker compose --env-file .env -f docker/docker-compose.yml up --build
+	docker compose $(COMPOSE_ENV_FILE) -f docker/docker-compose.yml up --build
 
 docker-down:
-	docker compose -f docker/docker-compose.yml down
+	docker compose $(COMPOSE_ENV_FILE) -f docker/docker-compose.yml down
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
