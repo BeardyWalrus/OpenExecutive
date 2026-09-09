@@ -21,8 +21,22 @@ RUN pip install uv
 RUN uvx --from git+https://github.com/SenteLabsAI/extensible-mcp extensible-mcp --help \
     || true
 
-COPY packages/core/pyproject.toml packages/core/uv.lock* ./
-RUN uv pip install --system -r pyproject.toml 2>/dev/null || uv pip install --system .
+# uv.lock is required, not optional (it was `uv.lock*`): the previous step
+# copied the lock and then ran `uv pip install -r pyproject.toml`, which
+# resolves fresh and ignores it. Every rebuild therefore took the newest
+# release of every unpinned dependency, and the image drifted away from the
+# versions the tests and the native install actually run against.
+#
+# That is not hypothetical. A rebuild picked up mcp 2.x, where FastMCP was
+# renamed to MCPServer and `mcp.server.fastmcp` no longer exists, and the
+# published image crash-looped on ModuleNotFoundError at import — while the
+# lockfile-installed native venv, on mcp 1.27.1, was fine. Installing the
+# exported lock makes an image build reproduce a known-good set instead.
+COPY packages/core/pyproject.toml packages/core/uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project \
+        --format requirements-txt -o /tmp/requirements.txt \
+    && uv pip install --system -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 # The `agent-sdk` extra, installed explicitly (the line above installs only the
 # base dependency set from pyproject). Ships the Claude Code CLI, which lets
