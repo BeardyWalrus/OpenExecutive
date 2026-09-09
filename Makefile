@@ -1,4 +1,4 @@
-.PHONY: dev dev-wasm stop test lint eval docker clean install install-agent-sdk link-env discord
+.PHONY: dev dev-wasm stop test lint eval docker docker-export clean install install-agent-sdk link-env discord
 
 # UV_EXTRAS lets you pull in optional Python extras, e.g.
 #   make install UV_EXTRAS="--extra agent-sdk"
@@ -227,6 +227,20 @@ stop:
 	@-command -v fuser >/dev/null 2>&1 && fuser -k $(API_PORT)/tcp $(UI_PORT)/tcp >/dev/null 2>&1 || true
 	@sleep 1
 	@python3 -c "$$PORT_SCAN" stop "$(API_PORT)" "$(UI_PORT)"
+
+# Package this install's accumulated state — company profile and documents,
+# vector store, database — for the Docker volume. The three do not share a
+# parent directory and the database path is cwd-relative, so the script
+# resolves each the way the app does rather than copying one tree. Stop the
+# app first; it refuses to run against a live API unless you pass --force.
+#
+#   make docker-export                     -> openexec-state.tar.gz
+#   make docker-export STATE=/tmp/oe.tgz
+#
+# Then on the Docker host, see README "Moving an existing install into Docker".
+STATE ?= openexec-state.tar.gz
+docker-export:
+	@python3 scripts/export-state.py -o "$(STATE)"
 
 test:
 	cd packages/core && uv run pytest tests/ -v --tb=short

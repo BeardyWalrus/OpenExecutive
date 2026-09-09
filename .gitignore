@@ -22,6 +22,11 @@ coverage.xml
 # Company data — never commit
 packages/core/company/
 !packages/core/company/.gitkeep
+# config.py resolves company data against the directory holding `.env`, and the
+# documented setup (`cp .env.example .env`) puts that at the repo root — so the
+# profile, uploaded documents and client slots land HERE, not under
+# packages/core. Ignoring only the path above left them committable.
+/company/
 
 # Vector store
 *.chroma/
@@ -75,4 +80,8 @@ evals/results/
 # Anvil
 ~/.claude/anvil/
 *.db
+# SQLite writes these beside the database in WAL mode. They are ignored
+# explicitly because `*.db` does not match them.
+*.db-wal
+*.db-shm
 packages/ui/tsconfig.tsbuildinfo
