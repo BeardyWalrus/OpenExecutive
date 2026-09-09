@@ -31,5 +31,35 @@ COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
+
+# Health probe via node — the image's own runtime, and guaranteed present
+# because it is the CMD. node:22-alpine ships no curl, and leaning on a busybox
+# applet would be an assumption where `node` is a certainty.
+#
+# /signin is the one path that answers 200 in both auth modes: middleware.ts
+# excludes it from the auth matcher, so with sign-in ON it renders rather than
+# redirecting to itself, and with DISABLE_AUTH=true the middleware is a no-op.
+# It draws on the root layout only, which makes no backend call — so the UI
+# does not report unhealthy merely because the API is down.
+#
+# {agent:false} is the node counterpart of the API probe's empty ProxyHandler.
+# node core http ignores proxy env by default, but NODE_USE_ENV_PROXY=1 turns
+# that on -- which a deployment behind a corporate proxy sets so next-auth's
+# server-side OAuth fetches reach Google. The probe would then go to the proxy,
+# and a proxy that answers 200 makes a DEAD UI report healthy. A false green is
+# strictly worse than the false red this whole change started as, so pin the
+# probe to a direct loopback connection. NO_PROXY is no defence here either:
+# 127.0.0.0/8 does not match, only a literal 127.0.0.1 does.
+#
+# PORT is read rather than hardcoded so overriding the env var does not
+# silently break the probe -- and parsed with parseInt exactly as
+# next/dist/build/utils.js parses it for server.js's bind. Concatenating the
+# raw string diverges from what the server actually did: "3000 " and "3000abc"
+# both bind 3000 but throw ERR_INVALID_URL in the probe, and "3000@evil.example"
+# binds 3000 while sending the probe to evil.example:80 every 30s. A UI serving
+# perfectly would have been marked unhealthy, and killed by autoheal or Swarm.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD ["node", "-e", "require('http').get('http://127.0.0.1:'+(parseInt(process.env.PORT,10)||3000)+'/signin',{agent:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+
 EXPOSE 3000
 CMD ["node", "server.js"]

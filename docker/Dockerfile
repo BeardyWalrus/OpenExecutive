@@ -129,6 +129,37 @@ ENV TRANSFORMERS_OFFLINE=1
 ENV WORKSPACE_MCP_CREDENTIALS_DIR=/data/google_credentials
 ENV WORKSPACE_MCP_TOOL_TIER=complete
 
+# Container health probe. Uses `python` — already this image's interpreter, and
+# verified present at /usr/local/bin/python — rather than curl: the image is
+# python:3.11-slim plus git and ships NO curl or wget, so the previous Compose
+# healthcheck (`curl -f`) could never execute. Docker scored every attempt as a
+# failure, leaving the container permanently "unhealthy" however well the API
+# was actually serving.
+#
+# 127.0.0.1, not localhost: uvicorn binds 0.0.0.0 (IPv4 only) and localhost can
+# resolve to ::1 first, where nothing is listening.
+#
+# An empty ProxyHandler is required, not decoration: urlopen otherwise builds
+# an opener from the environment, and a Docker host with HTTP_PROXY set injects
+# it into every container (docker-compose.yml also loads the repo-root .env
+# wholesale). The probe would then be sent to the proxy, which cannot reach
+# this container's loopback, and a perfectly healthy API would go unhealthy
+# after the start period. NO_PROXY is not a fix: Python matches it by suffix
+# with no CIDR support, so the natural 127.0.0.0/8 entry does not match.
+#
+# open() raises on a connection error or any non-2xx, so the call is the whole
+# test: clean exit 0 only when /health answered 200.
+#
+# --start-period matches the 5m grace_period fly.api.toml uses for this same
+# endpoint — the boot cost is Chroma's load plus the MCP gateway's tool index.
+# Inside that window a failing probe leaves the container "starting" rather
+# than flapping to unhealthy.
+#
+# Declared here rather than in Compose so it travels with the image: `docker
+# run` and an Unraid template get it too, not just `docker compose up`.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5m --retries=3 \
+    CMD ["python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8000/health', timeout=5)"]
+
 EXPOSE 8000
 
 CMD ["uvicorn", "openexecutive.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
