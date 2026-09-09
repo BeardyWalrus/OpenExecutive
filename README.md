@@ -506,6 +506,80 @@ This is the recommended way to run on a host where `next dev`/`next build` die
 with `Bus error`: the UI image is built on `node:22-alpine` (musl), so it never
 loads the glibc-linked `@next/swc` binary.
 
+### Moving an existing install into Docker
+
+A native install accumulates state in three places, and they do not share a
+parent directory:
+
+| What | Native location | In the container |
+|---|---|---|
+| Company profile, uploaded docs, MCP config, client slots | `company/` beside your `.env` | `/data/company/` |
+| Vector store the knowledge search reads | `chroma_db/` beside your `.env` | `/data/chroma_db/` |
+| People, decisions, initiatives, sessions, audit | `packages/core/episodic_memory.db` | `/data/episodic_memory.db` |
+
+The database is the one that catches people out: its path is **cwd-relative**
+(`EPISODIC_DB_PATH`, defaulting to `./episodic_memory.db`), and `make dev` runs
+uvicorn after `cd packages/core` — so it lands there rather than beside the
+other two. Copying "the data directory" leaves it behind, and the container
+comes up with an empty company.
+
+Stop the app, then package all three:
+
+```bash
+make stop                    # add API_PORT=… UI_PORT=… if you overrode them
+make docker-export           # -> openexec-state.tar.gz
+```
+
+SQLite files are copied through the backup API rather than read off disk, so a
+write-ahead log that has not been checkpointed still exports as one consistent
+file. The vector store's binary index segments have no such guarantee, which is
+why the export refuses to run while the API is up (`--force` overrides).
+
+Copy the tarball to the Docker host alongside `docker/docker-compose.ghcr.yml`
+and your `.env`, then load it into the volume before the first start:
+
+```bash
+docker compose --env-file .env -f docker/docker-compose.ghcr.yml run --rm \
+  --no-deps -v "$(pwd)/openexec-state.tar.gz:/state.tar.gz:ro" \
+  api tar --no-same-owner --no-same-permissions -xzf /state.tar.gz -C /data
+docker compose --env-file .env -f docker/docker-compose.ghcr.yml up -d
+```
+
+The image sets no `USER`, so that `tar` runs as root — where GNU tar restores
+archived ownership and modes by default, setuid bits included, from a file that
+has crossed hosts by whatever channel you chose. `--no-same-owner
+--no-same-permissions` declines that.
+
+`-C /data` **merges** into whatever is already in the volume rather than
+replacing it, so "before the first start" is load-bearing: loading over a volume
+an earlier run already populated leaves you with a mix of both.
+
+`run --rm --no-deps` borrows the `api` service purely for its volume mount, so
+Compose resolves the volume name itself — worth knowing, because the volume is
+named after the Compose project (`docker_executive_data` when the project name
+comes from the `docker/` directory), not `executive_data`.
+
+Three things do **not** come across in the tarball, by design:
+
+- **Your `.env`.** Rewrite it for the host rather than copying it: the compose
+  file sets `BACKEND_BASE_URL` itself, and a stale `localhost:8001` from a
+  native run would be wrong inside the network.
+- **Your Claude login.** `claude auth login` writes credentials to your home
+  directory, which the container does not share. Generate a token instead —
+  see the next section.
+- **Google Workspace credentials.** `scripts/mint-google-token.py` writes them
+  to `.gworkspace-credentials/`, while the container reads
+  `WORKSPACE_MCP_CREDENTIALS_DIR=/data/google_credentials`. Re-mint them against
+  the container rather than copying, and note the converse: if you ever point
+  `WORKSPACE_MCP_CREDENTIALS_DIR` *inside* `company/`, a live refresh token gets
+  swept into the tarball.
+
+Symlinks under `company/` are skipped rather than followed, and the export says
+so — otherwise a link into a docs folder elsewhere on the machine would archive
+that folder's contents into a file destined for another host. Do check
+`company/mcp_servers.json`, which *does* travel: the example uses `$VAR`
+references, but nothing stops a literal token being pasted in.
+
 ### Running the container on your Claude subscription
 
 The API image ships the Agent SDK, so the container can serve Claude calls from

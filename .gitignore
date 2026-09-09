@@ -22,6 +22,17 @@ coverage.xml
 # Company data — never commit
 packages/core/company/
 !packages/core/company/.gitkeep
+# config.py resolves company data against the directory holding `.env`, and the
+# documented setup (`cp .env.example .env`) puts that at the repo root — so the
+# profile, uploaded documents and client slots land HERE, not under
+# packages/core. Ignoring only the path above left them committable.
+#
+# Unanchored on purpose, like `chroma_db/` below: the location follows whichever
+# directory holds `.env`, falling back to the cwd, so it is not a two-place
+# problem. `evals/run_evals.py` defaults COMPANY_PROFILE_PATH to
+# ./company/profile.yaml and is documented as run from `evals/`, which anchoring
+# to the root would leave exposed.
+company/
 
 # Vector store
 *.chroma/
@@ -74,5 +85,15 @@ evals/results/
 
 # Anvil
 ~/.claude/anvil/
+# `make docker-export` packages the company profile, every uploaded document,
+# the client slots and the whole database into one archive. Ignored so the
+# command that exists to protect that data cannot be the thing that commits it.
+openexec-state.tar.gz
+*.tar.gz
+
 *.db
+# SQLite writes these beside the database in WAL mode. They are ignored
+# explicitly because `*.db` does not match them.
+*.db-wal
+*.db-shm
 packages/ui/tsconfig.tsbuildinfo

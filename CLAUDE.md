@@ -149,6 +149,13 @@ See `.env.example`. Required: `ANTHROPIC_API_KEY`. Optional integrations: `SLACK
 > `env -u BACKEND_SHARED_SECRET uv run pytest tests/unit/` — to match CI (CI
 > does not set it).
 
+> **Local gotcha 2:** `Settings` reads the repo-root `.env`, so a working local
+> config leaks into the suite. `AGENT_SDK_ENABLED=true` reroutes Claude models
+> away from the Anthropic provider, failing 5 tests in
+> `test_provider_registry.py` and `test_chat_route_parallel_context.py`. CI has
+> no `.env`. To reproduce CI exactly, move it aside for the run rather than
+> chasing the failures.
+
 > **UI lint:** `packages/ui` has no ESLint config — `npm run lint` opens an
 > interactive setup prompt. `npm run build` (`next build`) is the UI's
 > lint/type gate.
