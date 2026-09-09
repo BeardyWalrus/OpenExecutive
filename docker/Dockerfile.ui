@@ -31,5 +31,21 @@ COPY --from=build --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=build --chown=nextjs:nodejs /app/.next/static ./.next/static
 
 USER nextjs
+
+# Health probe via node — the image's own runtime, and guaranteed present
+# because it is the CMD. node:22-alpine ships no curl, and leaning on a busybox
+# applet would be an assumption where `node` is a certainty.
+#
+# /signin is the one path that answers 200 in both auth modes: middleware.ts
+# excludes it from the auth matcher, so with sign-in ON it renders rather than
+# redirecting to itself, and with DISABLE_AUTH=true the middleware is a no-op.
+# It draws on the root layout only, which makes no backend call — so the UI
+# does not report unhealthy merely because the API is down.
+#
+# PORT is read rather than hardcoded so overriding the env var does not
+# silently break the probe.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD ["node", "-e", "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/signin',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+
 EXPOSE 3000
 CMD ["node", "server.js"]

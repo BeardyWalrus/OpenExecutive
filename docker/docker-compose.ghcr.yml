@@ -47,11 +47,10 @@ services:
       # Left unset it stays the managed named volume declared below, which is
       # only reachable through a container.
       - ${DATA_PATH:-executive_data}:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    # No healthcheck block here on purpose: the image carries its own
+    # HEALTHCHECK (docker/Dockerfile), so it applies however the container is
+    # started — Compose, plain `docker run`, or an Unraid template. Declaring
+    # it in both places is how the two drift apart.
 
   ui:
     image: ghcr.io/beardywalrus/openexecutive-ui:${IMAGE_TAG:-latest}
