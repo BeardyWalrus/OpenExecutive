@@ -61,7 +61,30 @@ def _validate_filename(filename: str) -> None:
 
 
 def _resolve_path(domain: str, filename: str) -> Path:
-    return BUILTIN_KNOWLEDGE_PATH / domain / filename
+    """Locate a built-in doc from the (domain, filename) pair review items carry.
+
+    The tree has two tiers: `<domain>/*.md` and `failures/<domain>/*.md`.
+    `ReviewStore.sync_builtin_registrations` walks it **recursively** and keys
+    each row on the file's *immediate parent* directory, so
+    `failures/board/credit-suisse.md` registers as domain `board` — while this
+    resolved only the flat `<domain>/<filename>`, which for those files does
+    not exist. Every failure case study (17 of the 81 built-in docs) therefore
+     404'd in the review UI as "Could not load file content".
+
+    Mirroring the registration walk here keeps the two halves from drifting
+    apart again, and covers any future nesting rather than special-casing
+    `failures/`. Both arguments are already validated by the callers
+    (`_validate_domain` against DOMAIN_MAP, `_validate_filename` against a
+    strict regex), so the glob cannot escape the tree.
+    """
+    direct = BUILTIN_KNOWLEDGE_PATH / domain / filename
+    if direct.exists():
+        return direct
+    for candidate in sorted(BUILTIN_KNOWLEDGE_PATH.rglob(filename)):
+        if candidate.is_file() and candidate.parent.name == domain:
+            return candidate
+    # Nothing matched: hand back the flat path so callers raise their own 404.
+    return direct
 
 
 def _get_store(request: Request):  # type: ignore[return]
@@ -75,15 +98,26 @@ def _get_store(request: Request):  # type: ignore[return]
 
 @router.get("/builtin", response_model=BuiltinListResponse)
 async def list_builtin_files() -> BuiltinListResponse:
-    files: list[BuiltinFileMeta] = []
-    for domain in sorted(DOMAIN_MAP.keys()):
-        domain_dir = BUILTIN_KNOWLEDGE_PATH / domain
-        if not domain_dir.exists():
+    # Walk recursively and key on the immediate parent, matching both
+    # `ReviewStore.sync_builtin_registrations` and `_resolve_path`. A
+    # single-level glob here hid every `failures/<domain>/*.md` from the
+    # knowledge browser even though the review queue registered them.
+    seen: dict[tuple[str, str], Path] = {}
+    for f in sorted(BUILTIN_KNOWLEDGE_PATH.rglob("*.md")):
+        if "skills" in f.parts or not f.is_file():
             continue
-        for f in sorted(domain_dir.glob("*.md")):
-            files.append(
-                BuiltinFileMeta(domain=domain, filename=f.name, size_bytes=f.stat().st_size)
-            )
+        domain = f.parent.name
+        if domain not in DOMAIN_MAP:
+            continue
+        # A flat `<domain>/<file>` wins over a nested one of the same name, so
+        # the listing agrees with what `_resolve_path` would hand back.
+        key = (domain, f.name)
+        if key not in seen or f.parent == BUILTIN_KNOWLEDGE_PATH / domain:
+            seen[key] = f
+    files = [
+        BuiltinFileMeta(domain=domain, filename=name, size_bytes=path.stat().st_size)
+        for (domain, name), path in sorted(seen.items())
+    ]
     return BuiltinListResponse(files=files)
 
 
