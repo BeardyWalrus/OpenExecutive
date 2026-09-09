@@ -341,6 +341,13 @@ class MessageAssembler:
                         signature=block.get("signature", ""),
                     )
                 )
+        cost = estimate_cost_usd(
+            self._model,
+            input_tokens=self._usage.get("input_tokens"),
+            output_tokens=self._usage.get("output_tokens"),
+            cache_creation_input_tokens=self._usage.get("cache_creation_input_tokens"),
+            cache_read_input_tokens=self._usage.get("cache_read_input_tokens"),
+        )
         return SimpleNamespace(
             id=self._id,
             type="message",
@@ -364,18 +371,10 @@ class MessageAssembler:
                 # cost_is_estimate keeps it distinguishable from OpenRouter's
                 # actual charge downstream; None still means "no price known
                 # for this model", never "free".
-                cost=estimate_cost_usd(
-                    self._model,
-                    input_tokens=self._usage.get("input_tokens", 0),
-                    output_tokens=self._usage.get("output_tokens", 0),
-                    cache_creation_input_tokens=self._usage.get(
-                        "cache_creation_input_tokens", 0
-                    ),
-                    cache_read_input_tokens=self._usage.get(
-                        "cache_read_input_tokens", 0
-                    ),
-                ),
-                cost_is_estimate=True,
+                cost=cost,
+                # False when no estimate was produced (unpriced model), so a
+                # row never claims "we estimated this" beside a null figure.
+                cost_is_estimate=cost is not None,
             ),
         )
 

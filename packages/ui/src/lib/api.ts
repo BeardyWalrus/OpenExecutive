@@ -1684,8 +1684,13 @@ export async function getAuditSession(
 }
 
 // Cross-session token-usage aggregate used by /audit/usage. Totals plus by-day
-// and by-model breakdowns, summed from cache_event rows. `cost_usd` is the
-// actual OpenRouter charge captured per call (0 for rows that predate capture).
+// and by-model breakdowns, summed from cache_event rows. `cost_usd` mixes two
+// kinds of figure: the actual OpenRouter charge captured per call, and — on the
+// Claude subscription path, which is not billed per call — a dollar-equivalent
+// estimated from token counts at list prices. The per-row `cost_is_estimate`
+// flag is NOT aggregated, so this total does not say which it is; on a
+// single-provider install it is all one or all the other. 0 for rows that
+// predate cost capture.
 
 export interface UsageTotals {
   calls: number;

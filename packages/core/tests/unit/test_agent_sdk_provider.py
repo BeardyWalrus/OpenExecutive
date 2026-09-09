@@ -304,13 +304,44 @@ def test_assembler_builds_text_message_with_usage() -> None:
 
 
 def test_assembler_reports_no_cost_for_an_unpriced_model() -> None:
-    """None, never 0.0: an unknown model must not read as a free one."""
+    """None, never 0.0: an unknown model must not read as a free one. And
+    cost_is_estimate must be False -- a row must not claim it estimated
+    something while carrying a null figure."""
     asm = MessageAssembler()
     for ev in _text_stream("hi", model="some-future-model"):
         asm.feed(ev.event)
     msg = asm.finalize()
     assert msg.usage.cost is None
+    assert msg.usage.cost_is_estimate is False
     assert msg.usage.output_tokens == 5
+
+
+def test_assembler_prices_the_dated_pin_the_api_actually_reports() -> None:
+    """`message.model` comes off the wire, and Anthropic reports dated pins
+    (registry.py says so explicitly). An exact-match price table missed every
+    real call and reported $0 -- the bug the pricing module exists to fix."""
+    asm = MessageAssembler()
+    for ev in _text_stream("hi", model="claude-opus-5-20260315"):
+        asm.feed(ev.event)
+    msg = asm.finalize()
+    expected = (11 * 5.00 + 5 * 25.00 + 7 * 0.50) / 1_000_000
+    assert msg.usage.cost == pytest.approx(expected)
+    assert msg.usage.cost_is_estimate is True
+
+
+def test_assembler_survives_null_token_counts_in_the_delta() -> None:
+    """message_delta usage fields are Optional in the wire schema, and the
+    delta's values are merged over message_start's. Pricing None raised a
+    TypeError from finalize(), which runs during stream teardown."""
+    asm = MessageAssembler()
+    asm.feed({"type": "message_start",
+              "message": {"id": "m", "model": "claude-opus-5",
+                          "usage": {"input_tokens": 11}}})
+    asm.feed({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+              "usage": {"output_tokens": 5, "input_tokens": None,
+                        "cache_creation_input_tokens": None}})
+    msg = asm.finalize()
+    assert msg.usage.cost == pytest.approx(5 * 25.00 / 1_000_000)
 
 
 def test_assembler_reassembles_tool_use_and_strips_prefix() -> None:
