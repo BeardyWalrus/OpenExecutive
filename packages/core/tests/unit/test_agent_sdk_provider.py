@@ -294,8 +294,23 @@ def test_assembler_builds_text_message_with_usage() -> None:
     assert msg.usage.input_tokens == 11
     assert msg.usage.output_tokens == 5
     assert msg.usage.cache_read_input_tokens == 7
-    # Subscription calls are not metered per request.
+    # Subscription calls are not metered per request, but the subscription's
+    # allowance is what runs out -- so report the dollar-equivalent of the
+    # tokens rather than nothing, flagged as an estimate. claude-sonnet-4-6 is
+    # $3/MTok in, $15/MTok out, $0.30/MTok cache read.
+    expected = (11 * 3.00 + 5 * 15.00 + 7 * 0.30) / 1_000_000
+    assert msg.usage.cost == pytest.approx(expected)
+    assert msg.usage.cost_is_estimate is True
+
+
+def test_assembler_reports_no_cost_for_an_unpriced_model() -> None:
+    """None, never 0.0: an unknown model must not read as a free one."""
+    asm = MessageAssembler()
+    for ev in _text_stream("hi", model="some-future-model"):
+        asm.feed(ev.event)
+    msg = asm.finalize()
     assert msg.usage.cost is None
+    assert msg.usage.output_tokens == 5
 
 
 def test_assembler_reassembles_tool_use_and_strips_prefix() -> None:

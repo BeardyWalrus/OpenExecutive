@@ -52,6 +52,8 @@ from contextlib import AbstractAsyncContextManager, aclosing
 from types import SimpleNamespace
 from typing import Any
 
+from openexecutive.providers.pricing import estimate_cost_usd
+
 logger = logging.getLogger(__name__)
 
 # In-process MCP server name. The CLI namespaces MCP tools as
@@ -354,10 +356,26 @@ class MessageAssembler:
                     "cache_creation_input_tokens", 0
                 ),
                 cache_read_input_tokens=self._usage.get("cache_read_input_tokens", 0),
-                # Subscription usage is not billed per call, so there is no
-                # per-request USD figure to report. None (not 0.0) so cost
-                # dashboards can tell "not metered" from "free".
-                cost=None,
+                # Subscription usage is not billed per call, so no USD figure
+                # comes back over the wire -- but "not invoiced" is not "free".
+                # The subscription's allowance is what actually runs out, and a
+                # dollar-equivalent computed from these token counts is the
+                # figure that maps to it, so report that rather than nothing.
+                # cost_is_estimate keeps it distinguishable from OpenRouter's
+                # actual charge downstream; None still means "no price known
+                # for this model", never "free".
+                cost=estimate_cost_usd(
+                    self._model,
+                    input_tokens=self._usage.get("input_tokens", 0),
+                    output_tokens=self._usage.get("output_tokens", 0),
+                    cache_creation_input_tokens=self._usage.get(
+                        "cache_creation_input_tokens", 0
+                    ),
+                    cache_read_input_tokens=self._usage.get(
+                        "cache_read_input_tokens", 0
+                    ),
+                ),
+                cost_is_estimate=True,
             ),
         )
 
