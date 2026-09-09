@@ -558,11 +558,6 @@ services:
       ENABLE_CACHING: "true"
     volumes:
       - /mnt/user/appdata/openexec/data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
 
   ui:
     image: ghcr.io/beardywalrus/openexecutive-ui:latest

@@ -139,8 +139,16 @@ ENV WORKSPACE_MCP_TOOL_TIER=complete
 # 127.0.0.1, not localhost: uvicorn binds 0.0.0.0 (IPv4 only) and localhost can
 # resolve to ::1 first, where nothing is listening.
 #
-# urlopen raises on a connection error or any non-2xx, so a bare call is the
-# whole test: clean exit 0 only when /health answered 200.
+# An empty ProxyHandler is required, not decoration: urlopen otherwise builds
+# an opener from the environment, and a Docker host with HTTP_PROXY set injects
+# it into every container (docker-compose.yml also loads the repo-root .env
+# wholesale). The probe would then be sent to the proxy, which cannot reach
+# this container's loopback, and a perfectly healthy API would go unhealthy
+# after the start period. NO_PROXY is not a fix: Python matches it by suffix
+# with no CIDR support, so the natural 127.0.0.0/8 entry does not match.
+#
+# open() raises on a connection error or any non-2xx, so the call is the whole
+# test: clean exit 0 only when /health answered 200.
 #
 # --start-period matches the 5m grace_period fly.api.toml uses for this same
 # endpoint — the boot cost is Chroma's load plus the MCP gateway's tool index.
@@ -150,7 +158,7 @@ ENV WORKSPACE_MCP_TOOL_TIER=complete
 # Declared here rather than in Compose so it travels with the image: `docker
 # run` and an Unraid template get it too, not just `docker compose up`.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5m --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+    CMD ["python", "-c", "import urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8000/health', timeout=5)"]
 
 EXPOSE 8000
 

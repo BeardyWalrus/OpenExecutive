@@ -43,9 +43,14 @@ USER nextjs
 # does not report unhealthy merely because the API is down.
 #
 # PORT is read rather than hardcoded so overriding the env var does not
-# silently break the probe.
+# silently break the probe -- and parsed with parseInt exactly as
+# next/dist/build/utils.js parses it for server.js's bind. Concatenating the
+# raw string diverges from what the server actually did: "3000 " and "3000abc"
+# both bind 3000 but throw ERR_INVALID_URL in the probe, and "3000@evil.example"
+# binds 3000 while sending the probe to evil.example:80 every 30s. A UI serving
+# perfectly would have been marked unhealthy, and killed by autoheal or Swarm.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-    CMD ["node", "-e", "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/signin',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+    CMD ["node", "-e", "require('http').get('http://127.0.0.1:'+(parseInt(process.env.PORT,10)||3000)+'/signin',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
 
 EXPOSE 3000
 CMD ["node", "server.js"]
