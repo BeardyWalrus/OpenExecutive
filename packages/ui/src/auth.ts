@@ -95,17 +95,41 @@ function auditAuth(
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  providers: [Google],
-  // Auth.js refuses a request whose Host it does not trust, so on a LAN IP
-  // /api/auth/session returns 500 (UntrustedHost) — and because
-  // components/UserBadge.tsx renders "Loading…" until useSession() settles,
-  // the UI hangs there forever rather than showing an error.
+  // @auth/core auto-detects trustHost via `AUTH_URL ?? AUTH_TRUST_HOST ??
+  // VERCEL ?? CF_PAGES ?? NODE_ENV !== "production"` — a chain of `??`
+  // (nullish coalescing). This repo's own local-dev default sets AUTH_URL
+  // to an EMPTY STRING, which is present-but-not-nullish, so it
+  // short-circuits that chain to `false` *before* AUTH_TRUST_HOST or the
+  // NODE_ENV fallback are ever consulted — exactly the documented local-dev
+  // config (AUTH_TRUST_HOST=true, AUTH_URL blank) breaks sign-in.
   //
-  // With DISABLE_AUTH there is no sign-in to protect and no callback URL to
-  // forge, so host trust is moot: trust it and let the session endpoint answer
-  // (with no session) instead of failing. undefined leaves the normal case
-  // exactly as it was, driven by AUTH_TRUST_HOST.
-  trustHost: AUTH_DISABLED ? true : undefined,
+  // Reimplemented below with an emptiness test instead of `??`, so a blank
+  // AUTH_URL can no longer mask AUTH_TRUST_HOST. Deliberately NOT a
+  // hardcoded `true`: that would trust the host on any real deployment
+  // that leaves AUTH_URL blank, letting a spoofed X-Forwarded-Host drive
+  // the OAuth callback/redirect origin. VERCEL/CF_PAGES/NODE_ENV are also
+  // deliberately dropped, not just reordered: this app doesn't target
+  // those platforms, and a literal `process.env.NODE_ENV` check gets
+  // folded to a build-time constant by Next.js's bundler (verified against
+  // the compiled output — even reading it off an intermediate variable
+  // didn't survive Turbopack's dead-code elimination), so it can't
+  // actually reflect the container's runtime NODE_ENV the way @auth/core's
+  // own dynamic property access does. This repo's documented local-dev
+  // setup already sets AUTH_TRUST_HOST=true explicitly and never relied on
+  // that fallback anyway. A deployment that sets neither AUTH_URL nor
+  // AUTH_TRUST_HOST gets `false` here — fail-closed, matching intent.
+  //
+  // DISABLE_AUTH folds in as an additional way to trust: with sign-in off
+  // there is no callback URL to forge and no session to protect, so a
+  // spoofed Host buys nothing — while WITHOUT this, /api/auth/session keeps
+  // returning UntrustedHost on a LAN IP and UserBadge hangs on "Loading…".
+  // Written as an extra disjunct rather than a separate property so the
+  // fail-closed reasoning above still governs every other deployment.
+  trustHost:
+    AUTH_DISABLED ||
+    Boolean(process.env.AUTH_URL?.trim()) ||
+    process.env.AUTH_TRUST_HOST?.trim().toLowerCase() === "true",
+  providers: [Google],
   // Same reasoning for the secret. Auth.js refuses to answer /api/auth/session
   // without one (MissingSecret), which leaves useSession() stuck at "loading"
   // — so a DISABLE_AUTH install would have to set AUTH_SECRET purely to

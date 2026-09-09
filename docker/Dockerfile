@@ -21,32 +21,33 @@ RUN pip install uv
 RUN uvx --from git+https://github.com/SenteLabsAI/extensible-mcp extensible-mcp --help \
     || true
 
-# uv.lock is required, not optional (it was `uv.lock*`): the previous step
-# copied the lock and then ran `uv pip install -r pyproject.toml`, which
-# resolves fresh and ignores it. Every rebuild therefore took the newest
-# release of every unpinned dependency, and the image drifted away from the
-# versions the tests and the native install actually run against.
-#
-# That is not hypothetical. A rebuild picked up mcp 2.x, where FastMCP was
-# renamed to MCPServer and `mcp.server.fastmcp` no longer exists, and the
-# published image crash-looped on ModuleNotFoundError at import — while the
-# lockfile-installed native venv, on mcp 1.27.1, was fine. Installing the
-# exported lock makes an image build reproduce a known-good set instead.
 COPY packages/core/pyproject.toml packages/core/uv.lock ./
-RUN uv export --frozen --no-dev --no-emit-project \
-        --format requirements-txt -o /tmp/requirements.txt \
-    && uv pip install --system -r /tmp/requirements.txt \
-    && rm /tmp/requirements.txt
+# Install exactly what uv.lock pins. `uv pip install -r pyproject.toml` never
+# reads the lockfile — it re-resolves the loose ranges in pyproject.toml
+# against PyPI at build time, so the image drifted from the versions CI
+# tests (#87). `--locked` (NOT `--frozen`, which skips the check) fails the
+# build if uv.lock is stale relative to pyproject.toml — run `uv lock` and
+# commit. The exported `--hash` lines are verified by `uv pip install`; `-q`
+# stops uv echoing the whole export into the build log. Stay on `--system`:
+# the model bakes below and the runtime CMD rely on system site-packages.
+# (The fastembed install further down is a separate, unpinned resolution
+# into the same env; today it moves nothing because the locked versions
+# already satisfy its constraints.)
+# No fallback and no README.md in this layer: a silent fallback previously
+# masked failures while also needing README.md copied here — which busts the
+# cache (full dep install + baked embedding models below) on every README
+# edit (#81). Let a real break fail loudly.
+RUN uv export --locked --no-dev --no-emit-project -q -o requirements.txt \
+    && uv pip install --system -r requirements.txt
 
-# The `agent-sdk` extra, installed explicitly (the line above installs only the
-# base dependency set from pyproject). Ships the Claude Code CLI, which lets
+# The `agent-sdk` extra, installed explicitly (the locked install above covers
+# only the base dependency set). Ships the Claude Code CLI, which lets
 # AGENT_SDK_ENABLED=true serve model calls from a Claude subscription instead
 # of a metered ANTHROPIC_API_KEY. Authenticate headlessly by passing
 # CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`) — no interactive login and
 # no credential file inside the image. Adds ~220 MB to an image that already
 # bakes PyTorch and two embedding models.
 RUN uv pip install --system "claude-agent-sdk>=0.2.0"
-
 # Bake the embedding model the MCP gateway loads at startup
 # (sentence-transformers/all-MiniLM-L6-v2). Without this the ~90 MB model is
 # fetched from Hugging Face on every cold start, which dominates boot time —
@@ -54,7 +55,7 @@ RUN uv pip install --system "claude-agent-sdk>=0.2.0"
 # launched via `uvx` and inherits this process's environment, so pointing
 # HF_HOME at an image path lets that subprocess load the model from disk
 # instead of the network. Runs right after the dependency install so the
-# layer is reused unless pyproject changes, and before the offline flags
+# layer is reused unless pyproject/uv.lock change, and before the offline flags
 # (set further down) so the build itself can still reach the Hub.
 ENV HF_HOME=/opt/hf-cache
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"

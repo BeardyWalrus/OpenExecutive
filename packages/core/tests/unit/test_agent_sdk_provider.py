@@ -568,11 +568,22 @@ def test_claude_models_offered_when_only_agent_sdk_is_configured(
         lambda: _settings(anthropic_api_key=None, agent_sdk_enabled=True),
     )
     registry_mod._reset_for_tests()
-    assert "claude-sonnet-4-6" in registry_mod.allowed_models()
+    offered = registry_mod.allowed_models()
+    assert set(registry_mod.ANTHROPIC_DIRECT_MODELS) <= set(offered), offered
 
 
 def test_cli_model_map_covers_every_anthropic_direct_model() -> None:
-    """A slug missing from the map would be sent to the CLI verbatim and 400."""
-    assert set(registry_mod._CLAUDE_CLI_MODELS) == set(
-        registry_mod.ANTHROPIC_DIRECT_MODELS
-    )
+    """A slug missing from the map would be sent to the CLI verbatim and 400.
+
+    A superset rather than equality: the map is derived over the current trio
+    *and* previous-generation ids, so an ``agent_overrides`` row persisted
+    before a model rename still resolves to a tier alias. What must never
+    happen is a *current* model going unmapped — which is exactly what the
+    upstream rename to claude-opus-5 / claude-sonnet-5 / claude-haiku-4-5 did
+    to the old hand-written map, and what this assertion catches.
+    """
+    mapped = set(registry_mod._CLAUDE_CLI_MODELS)
+    missing = set(registry_mod.ANTHROPIC_DIRECT_MODELS) - mapped
+    assert not missing, f"current models absent from the CLI map: {sorted(missing)}"
+    # Every value must be a tier alias the CLI actually accepts, not an id.
+    assert set(registry_mod._CLAUDE_CLI_MODELS.values()) <= {"opus", "sonnet", "haiku"}
