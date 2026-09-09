@@ -339,12 +339,12 @@ def main() -> int:
 
     print(f"\nWrote {out} ({human(out.stat().st_size)}, mode 0600)")
     print(
-        "\nOn the Docker host, with this file and the compose file present:\n"
-        f"  docker compose --env-file .env -f docker/docker-compose.ghcr.yml run --rm \\\n"
-        f"    --no-deps -v \"$(pwd)/{out.name}:/state.tar.gz:ro\" \\\n"
-        "    api tar --no-same-owner --no-same-permissions \\\n"
-        "      -xzf /state.tar.gz -C /data\n"
-        "  docker compose --env-file .env -f docker/docker-compose.ghcr.yml up -d"
+        "\nOn the Docker host, with the stack down:\n"
+        f"  make docker-import STATE={out.name}\n"
+        "  docker compose --env-file .env -f docker/docker-compose.ghcr.yml up -d\n"
+        "\nAdd IMPORT_ARGS=--replace if that volume already holds an install "
+        "(recoverable),\nor --merge to extract over it. See README, "
+        "'Moving an existing install into Docker'."
     )
     return 0
 

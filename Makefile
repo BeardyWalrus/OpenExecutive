@@ -1,4 +1,4 @@
-.PHONY: dev dev-wasm stop test lint eval docker docker-export clean install install-agent-sdk link-env discord
+.PHONY: dev dev-wasm stop test lint eval docker docker-export docker-import docker-update clean install install-agent-sdk link-env discord
 
 # UV_EXTRAS lets you pull in optional Python extras, e.g.
 #   make install UV_EXTRAS="--extra agent-sdk"
@@ -241,6 +241,25 @@ stop:
 STATE ?= openexec-state.tar.gz
 docker-export:
 	@python3 scripts/export-state.py -o "$(STATE)"
+
+# Load an exported tarball into the Compose volume, with the stack DOWN — the
+# API writes to the same files, and swapping a database under a running
+# process is how you get a half-imported install.
+#
+#   make docker-import                             # refuses if state is already there
+#   make docker-import IMPORT_ARGS=--replace       # move it aside first, recoverably
+#   make docker-import IMPORT_ARGS=--merge         # extract over it
+#   make docker-import IMPORT_ARGS=--dry-run
+IMPORT_ARGS ?=
+docker-import:
+	@scripts/import-state.sh --state "$(STATE)" $(IMPORT_ARGS)
+
+# Pull the latest published images and restart. State lives in the named
+# volume, which neither pull nor recreate touches — so this is the whole
+# update, and the API migrates its own schema on boot.
+docker-update:
+	@docker compose --env-file .env -f docker/docker-compose.ghcr.yml pull
+	@docker compose --env-file .env -f docker/docker-compose.ghcr.yml up -d
 
 test:
 	cd packages/core && uv run pytest tests/ -v --tb=short

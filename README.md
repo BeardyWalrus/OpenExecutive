@@ -535,24 +535,69 @@ write-ahead log that has not been checkpointed still exports as one consistent
 file. The vector store's binary index segments have no such guarantee, which is
 why the export refuses to run while the API is up (`--force` overrides).
 
-Copy the tarball to the Docker host alongside `docker/docker-compose.ghcr.yml`
-and your `.env`, then load it into the volume before the first start:
+Copy the tarball to the Docker host, then load it **with the stack down** — the
+API writes to the same files, and swapping a database under a running process is
+how you get a half-imported install:
+
+```bash
+make docker-import STATE=openexec-state.tar.gz
+```
+
+Importing into a volume that already holds state is refused rather than silently
+merged, because the result of merging two installs is an old database beside a
+newer vector store. Pick explicitly:
+
+```bash
+make docker-import IMPORT_ARGS=--replace   # move existing state aside, recoverably
+make docker-import IMPORT_ARGS=--merge     # extract over it
+make docker-import IMPORT_ARGS=--dry-run   # show the command, touch nothing
+```
+
+`--replace` moves only the three entries the export manages into
+`/data/.superseded-<timestamp>/`, so it is undoable and — importantly — leaves
+the rest of the volume alone. `WORKSPACE_MCP_CREDENTIALS_DIR` puts Google
+Workspace credentials at `/data/google_credentials`, which the export
+deliberately does not contain; a "wipe /data and extract" import would destroy
+them. Delete the `.superseded-` directory once the import looks right.
+
+The archive is checked before it reaches the container: the image sets no
+`USER`, so `tar` there runs as root, and an archive with absolute or `..` paths
+is rejected on the host rather than trusted to the far side of that boundary.
+The extract also passes `--no-same-owner --no-same-permissions`, declining to
+restore archived ownership and modes — setuid bits included — from a file that
+has crossed hosts.
+
+Without a clone on the Docker host, the same thing by hand:
 
 ```bash
 docker compose --env-file .env -f docker/docker-compose.ghcr.yml run --rm \
   --no-deps -v "$(pwd)/openexec-state.tar.gz:/state.tar.gz:ro" \
   api tar --no-same-owner --no-same-permissions -xzf /state.tar.gz -C /data
+```
+
+Then start it:
+
+```bash
 docker compose --env-file .env -f docker/docker-compose.ghcr.yml up -d
 ```
 
-The image sets no `USER`, so that `tar` runs as root — where GNU tar restores
-archived ownership and modes by default, setuid bits included, from a file that
-has crossed hosts by whatever channel you chose. `--no-same-owner
---no-same-permissions` declines that.
+### Updating
 
-`-C /data` **merges** into whatever is already in the volume rather than
-replacing it, so "before the first start" is load-bearing: loading over a volume
-an earlier run already populated leaves you with a mix of both.
+New images are published on every push to `main`, so an update is:
+
+```bash
+make docker-update      # compose pull, then up -d
+```
+
+State lives in the named volume, which neither `pull` nor recreating the
+containers touches — so this is the whole update. A database from an older build
+upgrades itself on first boot: `initialize_db` runs from the API's lifespan and
+its migrations are idempotent and additive (`CREATE TABLE IF NOT EXISTS`, guarded
+`ALTER TABLE`). Re-importing is for moving state between machines, not for
+updating; you do not need to re-export after an upgrade.
+
+Pin a specific build with `IMAGE_TAG=sha-<commit>` if you want to hold or roll
+back.
 
 `run --rm --no-deps` borrows the `api` service purely for its volume mount, so
 Compose resolves the volume name itself — worth knowing, because the volume is
