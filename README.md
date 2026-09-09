@@ -533,6 +533,11 @@ services:
       AGENT_SDK_ENABLED: "true"
       CLAUDE_CODE_OAUTH_TOKEN: "PASTE-claude-setup-token-OUTPUT"
       ANTHROPIC_API_KEY: ""
+      # The only setting with no default. It is the address the Executive
+      # sends and polls as, so it is never guessed — but "" is accepted when
+      # the email integration is unused. Omitting the key entirely is what
+      # fails, with `EXEC_EMAIL_ADDRESS Field required` at startup.
+      EXEC_EMAIL_ADDRESS: ""
       VECTOR_STORE_PATH: /data/chroma_db
       COMPANY_PROFILE_PATH: /data/company/profile.yaml
       EPISODIC_DB_PATH: /data/episodic_memory.db
@@ -582,7 +587,14 @@ It then appears in each template's *Network Type* dropdown.
 | Port | *(none — keep it off the LAN)* | `3000` → `3000` |
 | WebUI | — | `http://[IP]:[PORT:3000]` |
 | Path | `/data` → `/mnt/user/appdata/openexec/data`, RW | *(none)* |
-| Variables | `AGENT_SDK_ENABLED=true`, `CLAUDE_CODE_OAUTH_TOKEN=…`, `VECTOR_STORE_PATH=/data/chroma_db`, `COMPANY_PROFILE_PATH=/data/company/profile.yaml`, `EPISODIC_DB_PATH=/data/episodic_memory.db` | `BACKEND_BASE_URL=http://openexec-api:8000`, `DISABLE_AUTH=true`, `AUTH_TRUST_HOST=true`, `NODE_ENV=production` |
+| Variables | `AGENT_SDK_ENABLED=true`, `CLAUDE_CODE_OAUTH_TOKEN=…`, `EXEC_EMAIL_ADDRESS=` (required — see below), `VECTOR_STORE_PATH=/data/chroma_db`, `COMPANY_PROFILE_PATH=/data/company/profile.yaml`, `EPISODIC_DB_PATH=/data/episodic_memory.db` | `BACKEND_BASE_URL=http://openexec-api:8000`, `DISABLE_AUTH=true`, `AUTH_TRUST_HOST=true`, `NODE_ENV=production` |
+
+`EXEC_EMAIL_ADDRESS` must be **present** even if empty. It is the one setting
+with no default — the Executive's own address, never guessed — and leaving the
+variable out entirely (rather than setting it to `""`) fails startup with
+`EXEC_EMAIL_ADDRESS Field required`. `docker-compose.ghcr.yml` passes
+`${EXEC_EMAIL_ADDRESS:-}`, so the Compose route is covered automatically; a
+hand-built container template is not.
 
 Note `BACKEND_BASE_URL` differs between the two routes: Compose addresses the
 service (`api`), the template UI addresses the container name
