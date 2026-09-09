@@ -17,6 +17,7 @@ from openexecutive.audit.redaction import (
     audit_tool_result,
     audit_tool_result_full,
 )
+from openexecutive.audit.usage import emit_cache_event
 from openexecutive.config import get_settings
 from openexecutive.memory.honcho_client import ReasoningLevel as HonchoReasoningLevel
 from openexecutive.orchestrator.action_chips import summarize_action
@@ -322,54 +323,21 @@ def _emit_cache_event(
     model: str,
     actor: str = "executive",
 ) -> None:
-    """Capture token + cache stats from an Anthropic streaming response.
+    """Thin alias for audit.usage.emit_cache_event.
 
-    Reads from `final_msg.usage` (a SimpleNamespace from the provider
-    abstraction in providers/translator.py). All getattrs are guarded so
-    a provider that doesn't surface a particular field still emits a row
-    with what it does have — never blocks the caller.
+    The implementation moved so that agents/base.py can emit the same row for
+    specialist calls without importing the orchestrator (which imports agents,
+    so that direction would be a cycle). Kept as a named function because the
+    two Executive call sites read better with the keyword-only shape they
+    already use.
     """
-    usage = getattr(final_msg, "usage", None)
-    if usage is None:
-        return
-    inp = int(getattr(usage, "input_tokens", 0) or 0)
-    out = int(getattr(usage, "output_tokens", 0) or 0)
-    cache_create = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
-    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
-    stop_reason = getattr(final_msg, "stop_reason", None)
-    # USD for this call. Two different kinds of number share this field:
-    # OpenRouter wires back what it ACTUALLY charged, while the Agent SDK
-    # (subscription) path has nothing to charge and instead reports a
-    # dollar-equivalent estimated from token counts at list prices. Both are
-    # worth recording -- a subscription's allowance is what runs out, and
-    # zero would hide it -- but they must not be silently interchangeable, so
-    # `cost_is_estimate` travels with the figure. Still None on the
-    # Anthropic-direct path (no cost wire, no estimate); aggregation treats a
-    # missing cost as 0.
-    raw_cost = getattr(usage, "cost", None)
-    try:
-        cost_usd = float(raw_cost) if raw_cost is not None else None
-    except (TypeError, ValueError):
-        cost_usd = None
-    cost_is_estimate = bool(getattr(usage, "cost_is_estimate", False))
-    audit_log(
-        "cache_event",
-        f"{model} iter={iteration} in={inp} out={out} cache_read={cache_read} "
-        f"cache_create={cache_create} cost={cost_usd}{' (est)' if cost_is_estimate else ''} stop={stop_reason}",
+    emit_cache_event(
+        final_msg=final_msg,
+        model=model,
+        iteration=iteration,
+        actor=actor,
         session_id=session_id,
         turn_id=turn_id,
-        actor=actor,
-        details={
-            "model": model,
-            "iteration": iteration,
-            "input_tokens": inp,
-            "output_tokens": out,
-            "cache_creation_input_tokens": cache_create,
-            "cache_read_input_tokens": cache_read,
-            "cost_usd": cost_usd,
-            "cost_is_estimate": cost_is_estimate,
-            "stop_reason": stop_reason,
-        },
     )
 
 

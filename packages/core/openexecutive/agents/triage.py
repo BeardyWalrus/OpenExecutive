@@ -10,6 +10,7 @@ from openexecutive.alerts.models import (
     AlertSeverity,
     TriageDecision,
 )
+from openexecutive.audit.usage import emit_cache_event
 from openexecutive.providers import get_provider
 
 if TYPE_CHECKING:
@@ -239,6 +240,14 @@ class TriageAgent(BaseAgent):
                 message = await caller.messages.create(**create_kwargs)  # type: ignore[union-attr]
             else:
                 message = await caller.messages_create(**create_kwargs)  # type: ignore[union-attr]
+            # Triage bypasses BaseAgent.analyze and calls the provider itself,
+            # so it needs its own emit or its spend stays invisible. Low cost
+            # per call, but it runs per inbound monitoring event.
+            emit_cache_event(
+                final_msg=message,
+                model=str(create_kwargs.get("model", "")),
+                actor="triage",
+            )
         except Exception:
             logger.exception("Triage LLM call failed for event %s", event.external_id)
             return TriageDecision(
