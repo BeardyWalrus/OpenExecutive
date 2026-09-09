@@ -40,7 +40,13 @@ services:
       - AGENT_SDK_ENABLED=${AGENT_SDK_ENABLED:-false}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
     volumes:
-      - executive_data:/data
+      # Set DATA_PATH to a host directory (e.g. on Unraid,
+      # DATA_PATH=/mnt/user/appdata/openexec/data) and this becomes a bind
+      # mount: the state is then ordinary files you can browse over SMB, back
+      # up with the rest of appdata, and load an export into by copying it in.
+      # Left unset it stays the managed named volume declared below, which is
+      # only reachable through a container.
+      - ${DATA_PATH:-executive_data}:/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
